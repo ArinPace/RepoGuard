@@ -680,24 +680,56 @@
     }
 
     const selected = selectionPickCount(cachedSelection);
-    panel.innerHTML = `
-      <div class="rg-panel-header">
-        <div>
-          <div class="rg-panel-title">RepoGuard</div>
-          <div class="rg-panel-count"><span data-rg-count>${selected}</span> selected</div>
-        </div>
-        <div class="rg-panel-actions">
-          <button type="button" data-rg-scan>Scan</button>
-          <button type="button" data-rg-clear>Clear</button>
-          <button type="button" data-rg-hide>Hide</button>
-        </div>
-      </div>
-      <div class="rg-panel-hint">
-        Tick files/folders here (GitHub’s list re-renders and would wipe in-row boxes). Then Scan — or open the RepoGuard popup for full findings.
-      </div>
-      <div class="rg-panel-status" data-rg-status data-kind="idle" hidden></div>
-      <ul class="rg-panel-list" data-rg-list></ul>
-    `;
+    panel.replaceChildren();
+
+    const header = document.createElement("div");
+    header.className = "rg-panel-header";
+
+    const headerLeft = document.createElement("div");
+    const titleEl = document.createElement("div");
+    titleEl.className = "rg-panel-title";
+    titleEl.textContent = "RepoGuard";
+    const countWrap = document.createElement("div");
+    countWrap.className = "rg-panel-count";
+    const countSpan = document.createElement("span");
+    countSpan.dataset.rgCount = "";
+    countSpan.textContent = String(selected);
+    countWrap.append(countSpan, document.createTextNode(" selected"));
+    headerLeft.append(titleEl, countWrap);
+
+    const actions = document.createElement("div");
+    actions.className = "rg-panel-actions";
+    const scanBtn = document.createElement("button");
+    scanBtn.type = "button";
+    scanBtn.dataset.rgScan = "";
+    scanBtn.textContent = "Scan";
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.dataset.rgClear = "";
+    clearBtn.textContent = "Clear";
+    const hideBtn = document.createElement("button");
+    hideBtn.type = "button";
+    hideBtn.dataset.rgHide = "";
+    hideBtn.textContent = "Hide";
+    actions.append(scanBtn, clearBtn, hideBtn);
+    header.append(headerLeft, actions);
+
+    const hint = document.createElement("div");
+    hint.className = "rg-panel-hint";
+    hint.textContent =
+      "Tick files/folders here (GitHub’s list re-renders and would wipe in-row boxes). Then Scan — or open the RepoGuard popup for full findings.";
+
+    const status = document.createElement("div");
+    status.className = "rg-panel-status";
+    status.dataset.rgStatus = "";
+    status.dataset.kind = "idle";
+    status.hidden = true;
+
+    const list = document.createElement("ul");
+    list.className = "rg-panel-list";
+    list.dataset.rgList = "";
+
+    panel.append(header, hint, status, list);
 
     setScanUi(scanUiKind, scanUiText);
     syncScanButtonState(panel);
@@ -738,12 +770,12 @@
       hideCheckboxes();
     });
 
-    const list = panel.querySelector("[data-rg-list]");
-    if (!list) return;
-
     if (entries.length === 0) {
-      list.outerHTML =
-        '<div class="rg-panel-empty">No file/folder links found on this page yet. Wait for GitHub to finish loading, then click Enable checkboxes again.</div>';
+      const empty = document.createElement("div");
+      empty.className = "rg-panel-empty";
+      empty.textContent =
+        "No file/folder links found on this page yet. Wait for GitHub to finish loading, then click Enable checkboxes again.";
+      list.replaceWith(empty);
       return;
     }
 
@@ -785,12 +817,17 @@
 
       const body = document.createElement("div");
       body.className = "rg-panel-item-body";
-      body.innerHTML = `
-        <span class="rg-panel-kind">${entry.kind}</span>
-        <span class="rg-panel-path"></span>
-      `;
-      body.querySelector(".rg-panel-path").textContent =
+
+      const kindSpan = document.createElement("span");
+      kindSpan.className = "rg-panel-kind";
+      kindSpan.textContent = entry.kind;
+
+      const pathSpan = document.createElement("span");
+      pathSpan.className = "rg-panel-path";
+      pathSpan.textContent =
         entry.kind === "folder" ? `${entry.path}/` : entry.path;
+
+      body.append(kindSpan, pathSpan);
 
       li.addEventListener("click", (event) => {
         if (event.target === input) return;

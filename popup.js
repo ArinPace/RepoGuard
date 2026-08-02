@@ -219,7 +219,7 @@ function clearResults() {
   currentDefaultBranch = "main";
   parkNotes();
   document.getElementById("results").hidden = true;
-  document.getElementById("severityGroups").innerHTML = "";
+  document.getElementById("severityGroups").replaceChildren();
   syncExportButton();
 }
 
@@ -341,7 +341,7 @@ function renderLocationPanel(finding) {
     summary.textContent = locationLabel(locs[0]);
     summary.hidden = false;
     list.hidden = true;
-    list.innerHTML = "";
+    list.replaceChildren();
     locationsExpanded = false;
     chevron.textContent = "";
     toggle.setAttribute("aria-expanded", "false");
@@ -357,13 +357,13 @@ function renderLocationPanel(finding) {
     summary.hidden = false;
     summary.textContent = `${locs.length} locations — click Location to expand`;
     list.hidden = true;
-    list.innerHTML = "";
+    list.replaceChildren();
     return;
   }
 
   summary.hidden = true;
   list.hidden = false;
-  list.innerHTML = "";
+  list.replaceChildren();
   for (const loc of locs) {
     const li = document.createElement("li");
     const btn = document.createElement("button");
@@ -467,7 +467,7 @@ function setOpenSeverity(severity) {
 function renderSeverityGroups(findings) {
   parkNotes();
   const container = document.getElementById("severityGroups");
-  container.innerHTML = "";
+  container.replaceChildren();
 
   const groups = findingsBySeverity(findings);
   const counts = countBySeverity(findings);
@@ -493,13 +493,23 @@ function renderSeverityGroups(findings) {
     toggle.type = "button";
     toggle.className = "severity-toggle";
     toggle.setAttribute("aria-expanded", "false");
-    toggle.innerHTML = `
-      <span class="severity-label">${SEVERITY_LABELS[severity]}</span>
-      <span class="severity-meta">
-        <span>${list.length}</span>
-        <span class="severity-chevron">▶</span>
-      </span>
-    `;
+
+    const label = document.createElement("span");
+    label.className = "severity-label";
+    label.textContent = SEVERITY_LABELS[severity];
+
+    const meta = document.createElement("span");
+    meta.className = "severity-meta";
+
+    const countSpan = document.createElement("span");
+    countSpan.textContent = String(list.length);
+
+    const chevron = document.createElement("span");
+    chevron.className = "severity-chevron";
+    chevron.textContent = "▶";
+
+    meta.append(countSpan, chevron);
+    toggle.append(label, meta);
     toggle.addEventListener("click", () => setOpenSeverity(severity));
 
     const ul = document.createElement("ul");
@@ -514,10 +524,16 @@ function renderSeverityGroups(findings) {
       button.className = "finding";
       button.dataset.findingId = finding.id;
       button.dataset.severity = finding.severity;
-      button.innerHTML = `
-        <span class="finding-title">${escapeHtml(finding.title)}</span>
-        <span class="finding-loc">${escapeHtml(formatFindingLoc(finding))}</span>
-      `;
+
+      const title = document.createElement("span");
+      title.className = "finding-title";
+      title.textContent = finding.title;
+
+      const loc = document.createElement("span");
+      loc.className = "finding-loc";
+      loc.textContent = formatFindingLoc(finding);
+
+      button.append(title, loc);
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();

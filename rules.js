@@ -88,6 +88,71 @@ function hasPathTraversalToken(lineText) {
   return /\.\.(\/|\\)/.test(lineText);
 }
 
+/** Executable syntax without regex or string/template literals. */
+function executableCodeOf(lineText) {
+  return stripStringLiterals(stripRegexLiterals(lineText));
+}
+
+/**
+ * Test/fixture paths: semantic vulnerability rules should not treat snippets
+ * here as production code. Secret rules still run (credentials in tests matter).
+ */
+function isTestOrFixturePath(filePath) {
+  const norm = String(filePath || "").replace(/\\/g, "/");
+  const segments = norm.split("/");
+  for (const seg of segments.slice(0, -1)) {
+    const lower = seg.toLowerCase();
+    if (
+      lower === "tests" ||
+      lower === "test" ||
+      lower === "__tests__" ||
+      lower === "fixtures" ||
+      lower === "__fixtures__"
+    ) {
+      return true;
+    }
+  }
+  const base = segments[segments.length - 1] || "";
+  return /\.test\./i.test(base) || /\.spec\./i.test(base);
+}
+
+function isSecretRuleId(ruleId) {
+  return String(ruleId || "").startsWith("secret.");
+}
+
+/**
+ * Best-effort extraction of comment body for rules that intentionally
+ * inspect comments (e.g. security TODOs). Avoids treating https:// as //.
+ * @returns {string | null}
+ */
+function extractCommentText(lineText) {
+  const trimmed = lineText.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith("//")) return trimmed.slice(2);
+  if (trimmed.startsWith("#")) return trimmed.slice(1);
+  if (trimmed.startsWith("*")) return trimmed.slice(1);
+  if (trimmed.startsWith("<!--")) {
+    return trimmed.replace(/^<!--/, "").replace(/-->\s*$/, "");
+  }
+  if (trimmed.startsWith("--")) return trimmed.slice(2);
+
+  const block = lineText.match(/\/\*([\s\S]*?)\*\//);
+  if (block) return block[1];
+
+  // Inline // comment — require that // is not part of a URL scheme (http://).
+  const inlineJs = lineText.match(/(^|[^:\/])\/\/(.*)$/);
+  if (inlineJs) return inlineJs[2];
+
+  // Inline # comment (common in Python/shell); skip Ruby "#{...}".
+  if (!/#\{/.test(lineText)) {
+    const hash = lineText.match(/(^|[^$])#(?!\{)(.*)$/);
+    if (hash) return hash[2];
+  }
+
+  return null;
+}
+
 /** @type {Rule[]} */
 export const RULES = [
   // ─── Secrets (severe) ─────────────────────────────────────────────
@@ -191,18 +256,21 @@ export const RULES = [
         return false;
       }
       if (isCommentLine(lineText)) return false;
+
+      // Drop regex literals so rule definitions like /\b(SELECT|...)/ do not match.
+      const withoutRegex = stripRegexLiterals(lineText);
       const hasSqlVerb =
-        /\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN)\b/i.test(lineText);
+        /\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN)\b/i.test(withoutRegex);
       if (!hasSqlVerb) return false;
 
-      if (/['"`].*\b(SELECT|INSERT|UPDATE|DELETE)\b/i.test(lineText)) {
-        if (/\+\s*\w+|['"`]\s*\+|\+\s*['"`]/.test(lineText)) return true;
-        if (/`[^`]*\$\{[^}]+\}[^`]*`/.test(lineText)) return true;
+      if (/['"`].*\b(SELECT|INSERT|UPDATE|DELETE)\b/i.test(withoutRegex)) {
+        if (/\+\s*\w+|['"`]\s*\+|\+\s*['"`]/.test(withoutRegex)) return true;
+        if (/`[^`]*\$\{[^}]+\}[^`]*`/.test(withoutRegex)) return true;
       }
 
       if (
         /%s|%\(|\.format\s*\(|f['"].*\b(SELECT|INSERT|UPDATE|DELETE)\b/i.test(
-          lineText,
+          withoutRegex,
         )
       ) {
         return true;
@@ -210,10 +278,10 @@ export const RULES = [
 
       if (
         /\b(query|execute|raw|sequelize\.query|knex\.raw)\s*\(\s*['"`][^'"`]*(SELECT|INSERT|UPDATE|DELETE)/i.test(
-          lineText,
+          withoutRegex,
         )
       ) {
-        if (/\+|\$\{/.test(lineText)) return true;
+        if (/\+|\$\{/.test(withoutRegex)) return true;
       }
 
       return false;
@@ -227,7 +295,8 @@ export const RULES = [
     fix: "Avoid eval. Prefer JSON.parse for data, or explicit parsers/maps for known commands.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /(^|[^.\w])eval\s*\(/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /(^|[^.\w])eval\s*\(/.test(executableCode);
     },
   },
   {
@@ -238,7 +307,8 @@ export const RULES = [
     fix: "Refactor so you do not build functions from strings. Use plain functions or a command map.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /\bnew\s+Function\s*\(/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /\bnew\s+Function\s*\(/.test(executableCode);
     },
   },
   {
@@ -420,8 +490,9 @@ export const RULES = [
     fix: "Prefer textContent for plain text. If you must render HTML, sanitize it with a trusted library.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      if (/\.innerHTML\s*=\s*['"`]\s*['"`]/.test(lineText)) return false;
-      return /\.innerHTML\s*=/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      if (/\.innerHTML\s*=\s*$/.test(executableCode.trim())) return false;
+      return /\.innerHTML\s*=/.test(executableCode);
     },
   },
   {
@@ -432,7 +503,8 @@ export const RULES = [
     fix: "Avoid assigning untrusted strings to outerHTML. Rebuild the DOM with createElement/textContent or sanitize first.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /\.outerHTML\s*=/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /\.outerHTML\s*=/.test(executableCode);
     },
   },
   {
@@ -443,7 +515,8 @@ export const RULES = [
     fix: "Use DOM APIs (createElement, textContent) or a templating approach with escaping/sanitization.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /\bdocument\.write(ln)?\s*\(/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /\bdocument\.write(ln)?\s*\(/.test(executableCode);
     },
   },
   {
@@ -454,7 +527,8 @@ export const RULES = [
     fix: "Use .text() for plain text, or sanitize HTML before .html().",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /\.html\s*\(\s*[^)]+/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /\.html\s*\(\s*[^)\s]/.test(executableCode);
     },
   },
   {
@@ -465,7 +539,8 @@ export const RULES = [
     fix: "Avoid it when possible. If required, sanitize with a maintained library (e.g. DOMPurify).",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return /\bdangerouslySetInnerHTML\b/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      return /\bdangerouslySetInnerHTML\b/.test(executableCode);
     },
   },
 
@@ -478,9 +553,10 @@ export const RULES = [
     fix: "Use crypto.getRandomValues (browser) or crypto.randomBytes / randomUUID (Node) for secrets and session tokens.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      if (!/\bMath\.random\s*\(/.test(lineText)) return false;
+      const executableCode = executableCodeOf(lineText);
+      if (!/\bMath\.random\s*\(/.test(executableCode)) return false;
       return /\b(token|secret|password|nonce|session|api[_-]?key)\b/i.test(
-        lineText,
+        stripRegexLiterals(lineText),
       );
     },
   },
@@ -492,13 +568,38 @@ export const RULES = [
     fix: "Use a slow password KDF: bcrypt, scrypt, or Argon2.",
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      const hash =
-        /\b(md5|sha1)\b/i.test(lineText) ||
-        /\bcreateHash\s*\(\s*['"]md5['"]|\bcreateHash\s*\(\s*['"]sha1['"]/.test(
-          lineText,
-        );
-      if (!hash) return false;
-      return /\b(password|passwd|pwd|credential)\b/i.test(lineText);
+      const withoutRegex = stripRegexLiterals(lineText);
+
+      // Require a password-hashing call pattern — not titles/prose that mention both words.
+      if (
+        /\b(md5|sha1)\s*\(\s*[^)]*\b(password|passwd|pwd|credential)\b/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\b(password|passwd|pwd|credential)\b[^;\n]{0,60}\b(md5|sha1)\s*\(/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\bcreateHash\s*\(\s*['"]md5['"]\s*\)[\s\S]{0,100}\.update\s*\(\s*[^)]*\b(password|passwd|pwd|credential)\b/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\bcreateHash\s*\(\s*['"]sha1['"]\s*\)[\s\S]{0,100}\.update\s*\(\s*[^)]*\b(password|passwd|pwd|credential)\b/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      return false;
     },
   },
   {
@@ -509,8 +610,12 @@ export const RULES = [
     fix: "Use createCipheriv / createDecipheriv with a strong key and random IV from crypto.randomBytes.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      if (/\bcreateCipheriv\b/.test(lineText)) return false;
-      return /\bcreateCipher\b/.test(lineText);
+      const executableCode = executableCodeOf(lineText);
+      if (/\bcreateCipheriv\b/.test(executableCode)) return false;
+      return (
+        /\bcreateCipher\s*\(/.test(executableCode) ||
+        /\.\s*createCipher\b/.test(executableCode)
+      );
     },
   },
   {
@@ -576,9 +681,11 @@ export const RULES = [
     test(filePath, _line, lineText) {
       if (!CONFIG_LIKE.test(filePath) || isCommentLine(lineText)) return false;
       if (isLockfile(filePath)) return false;
+      const withoutRegex = stripRegexLiterals(lineText);
+      const executableCode = stripStringLiterals(withoutRegex);
       return (
-        /\bdebug\s*[:=]\s*true\b/i.test(lineText) ||
-        /\bDEBUG\s*=\s*['"]?true['"]?/i.test(lineText)
+        /\bdebug\s*[:=]\s*true\b/i.test(executableCode) ||
+        /\bDEBUG\s*=\s*['"]?true['"]?/i.test(executableCode)
       );
     },
   },
@@ -795,11 +902,44 @@ export const RULES = [
     fix: "Use AES-GCM or ChaCha20-Poly1305 with modern libraries and random IVs/nonces.",
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return (
-        /\b(DES|3DES|RC4|AES[/_\-]?ECB|ECB[/_\-]?AES)\b/i.test(lineText) ||
-        /\bcreateCipher(iv)?\s*\(\s*['"][^'"]*ecb/i.test(lineText) ||
-        /\bCipher\.getInstance\s*\(\s*['"][^'"]*ECB/i.test(lineText)
-      );
+      const withoutRegex = stripRegexLiterals(lineText);
+
+      // Require cipher construction / algorithm configuration — not bare prose.
+      if (
+        /\bcreateCipher(iv)?\s*\(\s*['"][^'"]*\b(DES|3DES|RC4|AES[/_\-]?ECB|ECB)/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\bCipher\.getInstance\s*\(\s*['"][^'"]*\b(DES|3DES|RC4|ECB|AES[/_\-]?ECB)/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\b(algorithm|cipher|cipherMode|encryption|mode)\s*[:=]\s*['"][^'"]*\b(DES|3DES|RC4|AES[/_\-]?ECB|ECB)\b/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\b(openssl_encrypt|openssl_decrypt)\s*\([^)]*['"][^'"]*\b(DES|RC4|ECB)/i.test(
+          withoutRegex,
+        )
+      ) {
+        return true;
+      }
+      // crypto.Cipher / CryptoJS.DES style API with weak alg nearby
+      if (
+        /\b(CryptoJS|crypto)\s*\.\s*(DES|TripleDES|RC4)\b/i.test(withoutRegex)
+      ) {
+        return true;
+      }
+      return false;
     },
   },
   {
@@ -1012,8 +1152,10 @@ export const RULES = [
     fix: "Triage the comment: fix the issue, open a tracked ticket, or remove outdated notes.",
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) && !CONFIG_LIKE.test(filePath)) return false;
+      const comment = extractCommentText(lineText);
+      if (comment == null) return false;
       return /\b(TODO|FIXME|XXX|HACK)\b.*\b(security|vulnerab|auth|xss|inject|csrf|crypto)\b/i.test(
-        lineText,
+        comment,
       );
     },
   },
@@ -1026,8 +1168,12 @@ export const RULES = [
 export function matchLine(filePath, lineNumber, lineText) {
   /** @type {RuleHit[]} */
   const hits = [];
+  const skipSemanticOnTests = isTestOrFixturePath(filePath);
   for (const rule of RULES) {
     try {
+      if (skipSemanticOnTests && !isSecretRuleId(rule.id)) {
+        continue;
+      }
       if (rule.test(filePath, lineNumber, lineText)) {
         hits.push({
           ruleId: rule.id,
