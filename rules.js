@@ -861,10 +861,29 @@ export const RULES = [
     fix: "Block __proto__ and constructor keys when merging objects. Use Object.create(null) maps or hardened merge helpers.",
     test(filePath, _line, lineText) {
       if (!JS_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return (
-        /__proto__/.test(lineText) ||
-        /\bconstructor\s*\[|\bconstructor\.prototype\b/.test(lineText)
-      );
+
+      // Ignore mentions inside string/regex literals (rule titles, why text, /__proto__/).
+      const code = stripStringLiterals(stripRegexLiterals(lineText));
+
+      // Unquoted writes / merge keys that survive literal stripping.
+      if (/\b__proto__\s*[:=]/.test(code)) return true;
+      if (/\.\s*__proto__\b\s*=/.test(code)) return true;
+      if (/\bconstructor\.prototype\b\s*=/.test(code)) return true;
+      if (/\bconstructor\.prototype\s*\.\s*\w+\s*=/.test(code)) return true;
+      if (/\bconstructor\s*\[[^\]]*\]\s*=/.test(code)) return true;
+
+      // Quoted keys are removed by stripStringLiterals — check assignment on the raw line.
+      if (/\[\s*['"]__proto__['"]\s*\]\s*=/.test(lineText)) return true;
+      if (/\[\s*['"]constructor['"]\s*\]\s*\.\s*prototype\s*=/.test(lineText)) {
+        return true;
+      }
+      if (/\[\s*['"]constructor['"]\s*\]\s*\[\s*['"]prototype['"]\s*\]\s*=/.test(
+        lineText,
+      )) {
+        return true;
+      }
+
+      return false;
     },
   },
   {
