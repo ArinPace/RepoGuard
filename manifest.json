@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RepoGuard",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Scan GitHub repositories for common security vulnerabilities and learn how to fix them.",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [

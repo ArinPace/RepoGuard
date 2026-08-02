@@ -609,18 +609,24 @@ export const RULES = [
   {
     id: "ssrf.user-controlled-url",
     severity: "severe",
-    title: "HTTP request built from a variable URL",
-    why: "Fetching a URL influenced by users can become SSRF: the server is tricked into calling internal services or cloud metadata.",
-    fix: "Allow-list schemes/hosts, block link-local and cloud metadata IPs, and never pass raw request params into server-side HTTP clients.",
+    title: "HTTP request may use a user-controlled URL (SSRF)",
+    why: "Server-side HTTP clients that take URLs from query/body/params can be abused for SSRF (internal services, cloud metadata). Plain client-side fetch() to an internally built URL is not SSRF.",
+    fix: "Allow-list schemes/hosts, block link-local and metadata IPs, and never pass raw request parameters into server-side HTTP clients.",
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return (
-        /\b(fetch|axios\.(get|post|put|delete|request)|got\(|request\(|http\.(get|request)|https\.(get|request)|urllib\.request|requests\.(get|post|put|delete)|RestTemplate|HttpClient|WebClient|http\.Get|http\.Post)\s*\([^)]*\$\{/i.test(
+
+      // SSRF needs an untrusted URL. Without a request/user-input signal on
+      // this line, client fetch(url) / fetch(`${host}/${id}`) is noise.
+      const hasUserControlledUrl =
+        /\b(req\.(query|body|params|get)|request\.(args|GET|POST|query|form|json|params|data)|query\.(get|param)|params\[|searchParams\.|URLSearchParams|cgi\.Field|r\.URL\.Query|r\.FormValue|r\.Form\b|Request\.(Query|Form|QueryString)|@RequestParam|getParameter\s*\(|HttpServletRequest|user[_-]?url|target[_-]?url|callback[_-]?url|webhook[_-]?url|redirect[_-]?url)\b/i.test(
           lineText,
         ) ||
-        /\b(fetch|axios\.(get|post)|requests\.(get|post)|http\.Get)\s*\(\s*\w+\s*[,)]/.test(
-          lineText,
-        )
+        /\$_(GET|POST|REQUEST)\b/.test(lineText);
+      if (!hasUserControlledUrl) return false;
+
+      // HTTP client sink on the same line as that user-controlled value.
+      return /\b(fetch|axios\.(get|post|put|delete|request|head)|got\(|request\(|http\.(get|request)|https\.(get|request)|urllib\.request|requests\.(get|post|put|delete|head|request)|RestTemplate|HttpClient|WebClient|http\.Get|http\.Post|http\.NewRequest|curl_exec|file_get_contents)\s*\(/i.test(
+        lineText,
       );
     },
   },
