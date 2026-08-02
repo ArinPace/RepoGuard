@@ -751,12 +751,16 @@ export const RULES = [
     fix: "Validate types, strip operator keys from user objects, and avoid $where. Use typed query builders.",
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) || isCommentLine(lineText)) return false;
-      return (
-        /\$where\b/.test(lineText) ||
-        /\bfind\s*\(\s*\{[^}]*\$where/.test(lineText) ||
-        /\b(req\.body|request\.json|params)\b.*\.(find|findOne|update|deleteOne)/i.test(
-          lineText,
-        )
+      if (isLockfile(filePath)) return false;
+
+      // $where as a query operator / object key — not mentions inside
+      // regex literals (/\$where/) or prose/strings in rule definitions.
+      if (/(?:\{|,|\s)(["']?)\$where\1\s*:/.test(lineText)) return true;
+      if (/\[\s*["']\$where["']\s*\]\s*=/.test(lineText)) return true;
+
+      // User-controlled object passed into MongoDB-style mutators/queries.
+      return /\.(find|findOne|update|updateOne|updateMany|deleteOne|deleteMany|replaceOne|aggregate)\s*\(\s*(req\.(body|query)|request\.(json|args|GET|POST|data)|params)\b/.test(
+        lineText,
       );
     },
   },
