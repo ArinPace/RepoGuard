@@ -70,6 +70,24 @@ function isCommentLine(lineText) {
   );
 }
 
+/** Remove /.../ regex literals so rule definitions are not scanned as code. */
+function stripRegexLiterals(lineText) {
+  return lineText.replace(/(?<![\w$])\/(?:\\.|[^/\n])+\/[gimsuyd]*/g, " ");
+}
+
+/** Remove quoted / template string contents; keep call sites and identifiers. */
+function stripStringLiterals(lineText) {
+  return lineText
+    .replace(/'(?:\\.|[^'\\])*'/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ")
+    .replace(/`(?:\\.|[^`\\])*`/g, " ");
+}
+
+/** True if ../ or ..\ appears anywhere on the line (including inside strings). */
+function hasPathTraversalToken(lineText) {
+  return /\.\.(\/|\\)/.test(lineText);
+}
+
 /** @type {Rule[]} */
 export const RULES = [
   // ─── Secrets (severe) ─────────────────────────────────────────────
@@ -600,9 +618,14 @@ export const RULES = [
     test(filePath, _line, lineText) {
       if (!CODE_LIKE.test(filePath) && !CONFIG_LIKE.test(filePath)) return false;
       if (isCommentLine(lineText) || isLockfile(filePath)) return false;
-      if (!/\.\.(\/|\\)/.test(lineText)) return false;
-      return /\b(path|file|filename|filepath|open|read|write|sendFile|send_file|createReadStream|include|require)\b/i.test(
-        lineText,
+
+      // Real path use still has ../ inside string args; rule definitions often
+      // mention "../" only inside prose/regex. Require a path API outside literals.
+      if (!hasPathTraversalToken(lineText)) return false;
+
+      const codeOnly = stripStringLiterals(stripRegexLiterals(lineText));
+      return /\b(path|file|filename|filepath|open|read|write|sendFile|send_file|createReadStream|include|require|readFile|writeFile|readFileSync|writeFileSync|createWriteStream)\b/i.test(
+        codeOnly,
       );
     },
   },
