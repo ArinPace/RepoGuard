@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RepoGuard</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <h1>RepoGuard</h1>
+        <span class="badge" id="badge" data-kind="other">Checking…</span>
+      </header>
+
+      <p class="status" id="status">Checking active tab…</p>
+      <p class="detail" id="detail"></p>
+
+      <div class="checkbox-actions" id="checkboxActions" hidden>
+        <button type="button" class="secondary-btn" id="enableChecksBtn">
+          Enable checkboxes
+        </button>
+        <button type="button" class="secondary-btn" id="hideChecksBtn">
+          Hide checkboxes
+        </button>
+      </div>
+
+      <button type="button" class="scan-btn" id="scanBtn" disabled>
+        Scan repository
+      </button>
+
+      <section class="results" id="results" hidden>
+        <!-- Parked here when hidden; moved under the clicked finding when open -->
+        <div id="notesPark" class="notes-park">
+          <article class="notes" id="notes" hidden>
+            <h2 class="notes-title" id="notesTitle"></h2>
+            <p class="notes-meta" id="notesMeta"></p>
+            <button type="button" class="notes-heading notes-loc-toggle" id="notesLocToggle">
+              Location
+              <span class="notes-loc-chevron" id="notesLocChevron">▶</span>
+            </button>
+            <p class="notes-body notes-loc-summary" id="notesLocation"></p>
+            <ul class="notes-loc-list" id="notesLocList" hidden></ul>
+            <h3 class="notes-heading">Why this is an issue</h3>
+            <p class="notes-body" id="notesWhy"></p>
+            <h3 class="notes-heading">How to fix it</h3>
+            <p class="notes-body" id="notesFix"></p>
+            <button type="button" class="open-btn" id="openBtn">
+              Open on GitHub
+            </button>
+          </article>
+        </div>
+        <div class="severity-groups" id="severityGroups"></div>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
