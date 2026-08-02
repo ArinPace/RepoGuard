@@ -1,6 +1,10 @@
 import { parseGitHubRepoUrl, formatRepoLabel } from "./github.js";
 import { scannableExtensionList } from "./githubApi.js";
-import { locationToGitHubUrl, countBySeverity } from "./findings.js";
+import {
+  scanRepository,
+  locationToGitHubUrl,
+  countBySeverity,
+} from "./findings.js";
 import {
   getSelection,
   selectionIsEmpty,
@@ -216,6 +220,91 @@ function clearResults() {
   parkNotes();
   document.getElementById("results").hidden = true;
   document.getElementById("severityGroups").innerHTML = "";
+  syncExportButton();
+}
+
+function syncExportButton() {
+  const btn = document.getElementById("exportBtn");
+  if (!btn) return;
+  const has = currentFindings.length > 0;
+  btn.disabled = !has;
+  if (btn.dataset.copied !== "1") {
+    btn.textContent = "Export findings";
+  }
+}
+
+/**
+ * @param {import("./findings.js").Finding[]} findings
+ */
+function formatFindingsExport(findings) {
+  const repoLabel = currentRepo ? formatRepoLabel(currentRepo) : "unknown repo";
+  const branch = currentDefaultBranch || "main";
+  const counts = countBySeverity(findings);
+  const lines = [
+    `RepoGuard findings — ${repoLabel}`,
+    `Branch: ${branch}`,
+    `Total: ${findings.length} (${counts.severe} severe, ${counts.moderate} moderate, ${counts.mild} mild)`,
+    "",
+  ];
+
+  const order = ["severe", "moderate", "mild"];
+  for (const severity of order) {
+    const group = findings.filter((f) => f.severity === severity);
+    if (group.length === 0) continue;
+    lines.push(`## ${severity.toUpperCase()} (${group.length})`);
+    lines.push("");
+    for (const finding of group) {
+      const locs = finding.locations?.length
+        ? finding.locations
+        : [{ file: finding.file, line: finding.line }];
+      lines.push(`[${finding.severity}] ${finding.title}`);
+      if (finding.ruleId) lines.push(`Rule: ${finding.ruleId}`);
+      lines.push("Locations:");
+      for (const loc of locs) {
+        const url =
+          currentRepo != null
+            ? locationToGitHubUrl(currentRepo, loc, branch)
+            : `${loc.file}:${loc.line}`;
+        lines.push(`  - ${loc.file}:${loc.line}`);
+        if (currentRepo) lines.push(`    ${url}`);
+      }
+      lines.push(`Why: ${finding.why || ""}`);
+      lines.push(`Fix: ${finding.fix || ""}`);
+      lines.push("");
+    }
+  }
+
+  return lines.join("\n").trim() + "\n";
+}
+
+async function handleExportFindings() {
+  const btn = document.getElementById("exportBtn");
+  if (!currentFindings.length) return;
+
+  const text = formatFindingsExport(currentFindings);
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      btn.dataset.copied = "1";
+      btn.textContent = "Copied!";
+      window.setTimeout(() => {
+        btn.dataset.copied = "0";
+        btn.textContent = "Export findings";
+        syncExportButton();
+      }, 1500);
+    }
+  } catch (error) {
+    if (btn) {
+      btn.textContent = "Copy failed";
+      window.setTimeout(() => {
+        btn.textContent = "Export findings";
+        syncExportButton();
+      }, 1500);
+    }
+    document.getElementById("detail").textContent = String(
+      error?.message || error || "Could not copy findings to the clipboard.",
+    );
+  }
 }
 
 function escapeHtml(value) {
@@ -502,6 +591,7 @@ function showScanResult(result) {
   parkNotes();
 
   renderSeverityGroups(result.findings);
+  syncExportButton();
 
   renderState({
     kind: "results",
@@ -730,6 +820,12 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("openBtn").addEventListener("click", () => {
     handleOpenOnGitHub().catch(() => {
       /* ignore — popup may close when opening a tab */
+    });
+  });
+
+  document.getElementById("exportBtn").addEventListener("click", () => {
+    handleExportFindings().catch(() => {
+      /* clipboard / focus edge cases */
     });
   });
 

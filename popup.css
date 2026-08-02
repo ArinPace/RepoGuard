@@ -130,6 +130,12 @@ h1 {
   border-top: 1px solid #21262d;
 }
 
+.results-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
 .severity-groups {
   display: flex;
   flex-direction: column;
