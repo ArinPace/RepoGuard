@@ -60,27 +60,15 @@ function isLockfile(filePath) {
 
 function isCommentLine(lineText) {
   const t = lineText.trim();
-  if (!t) return false;
-  if (
+  return (
     t.startsWith("//") ||
     t.startsWith("#") ||
     t.startsWith("*") ||
     t.startsWith("<!--") ||
     t.startsWith("--") || // SQL
     t.startsWith(";") // Lisp / some inis
-  ) {
-    return true;
-  }
-  // Entire line is a block comment: /* ... */
-  if (/^\/\*[\s\S]*\*\/$/.test(t)) return true;
-  return false;
+  );
 }
-
-/**
- * Rules that intentionally match comment text (not "commented-out code").
- * Everything else skips full-line comments in matchLine.
- */
-const RULES_ALLOW_COMMENT_LINES = new Set(["mild.security-todo"]);
 
 /** Remove /.../ regex literals so rule definitions are not scanned as code. */
 function stripRegexLiterals(lineText) {
@@ -1038,12 +1026,8 @@ export const RULES = [
 export function matchLine(filePath, lineNumber, lineText) {
   /** @type {RuleHit[]} */
   const hits = [];
-  const commentLine = isCommentLine(lineText);
   for (const rule of RULES) {
     try {
-      if (commentLine && !RULES_ALLOW_COMMENT_LINES.has(rule.id)) {
-        continue;
-      }
       if (rule.test(filePath, lineNumber, lineText)) {
         hits.push({
           ruleId: rule.id,
