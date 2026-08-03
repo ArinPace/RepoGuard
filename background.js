@@ -23,6 +23,67 @@ chrome.sidePanel
   });
 
 /**
+ * Side panel is GitHub-only. Default off; enable per tab on github.com.
+ * Chrome hides the panel when switching to a tab where it is disabled.
+ * @param {string | undefined} url
+ */
+function isGitHubUrl(url) {
+  if (!url) return false;
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "github.com" || hostname === "www.github.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {number} tabId
+ * @param {string | undefined} url
+ */
+async function syncSidePanelForTab(tabId, url) {
+  if (isGitHubUrl(url)) {
+    await chrome.sidePanel.setOptions({
+      tabId,
+      path: "sidepanel.html",
+      enabled: true,
+    });
+    return;
+  }
+  // No readable URL (chrome://, locked tabs, non-granted hosts) → treat as off-site.
+  await chrome.sidePanel.setOptions({
+    tabId,
+    enabled: false,
+  });
+}
+
+// Global default: disabled until a tab is confirmed on GitHub.
+chrome.sidePanel
+  .setOptions({ path: "sidepanel.html", enabled: false })
+  .catch(() => {});
+
+chrome.tabs.onUpdated.addListener((tabId, _info, tab) => {
+  syncSidePanelForTab(tabId, tab?.url).catch(() => {});
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs
+    .get(tabId)
+    .then((tab) => syncSidePanelForTab(tabId, tab?.url))
+    .catch(() => {
+      chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
+    });
+});
+
+chrome.tabs.query({}).then((tabs) => {
+  for (const tab of tabs) {
+    if (typeof tab.id === "number") {
+      syncSidePanelForTab(tab.id, tab.url).catch(() => {});
+    }
+  }
+}).catch(() => {});
+
+/**
  * @param {unknown} raw
  * @returns {import("./selection.js").RepoSelection | null}
  */

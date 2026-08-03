@@ -4,7 +4,7 @@ Chrome extension that scans public GitHub repositories with **local heuristic ru
 
 ## Current status
 
-**Side panel UI.** Click the RepoGuard toolbar icon to open a docked side panel. Select files/folders from the list (read from the active GitHub tab), scan, and review findings — all in one place. No popup + floating overlay workflow.
+**Side panel UI.** Click the RepoGuard toolbar icon to open a docked side panel. Select files/folders from the list (read from the active GitHub tab), scan, and review findings — all in one place. The panel is enabled only on `github.com` tabs and auto-hides when you switch away or leave GitHub.
 
 ## How to use
 
