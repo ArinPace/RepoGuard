@@ -9,7 +9,7 @@
  * @property {string[]} folders - prefixes with trailing slash, e.g. "src/"
  */
 
-/** Shared storage area usable from popup + content script. */
+/** Shared storage area usable from side panel + content script. */
 export const selectionStore = chrome.storage.local;
 
 export function emptySelection() {

@@ -325,8 +325,8 @@ describe("self-scan regression", () => {
   });
 
   describe("UI HTML sinks removed", () => {
-    it("popup.js and content.js have no innerHTML/outerHTML assignments", () => {
-      for (const rel of ["popup.js", "content.js"]) {
+    it("sidepanel.js and content.js have no innerHTML/outerHTML assignments", () => {
+      for (const rel of ["sidepanel.js", "content.js"]) {
         const text = readFileSync(join(root, rel), "utf8");
         const offenders = text
           .split(/\n/)

@@ -4,29 +4,29 @@ Chrome extension that scans public GitHub repositories with **local heuristic ru
 
 ## Current status
 
-**Chunk 8 — Scan from the selection panel.** The floating GitHub panel has a primary **Scan** button (disabled until something is selected). Scans run in a background service worker so the popup does not need to stay open; open the popup afterward for full finding details.
+**Side panel UI.** Click the RepoGuard toolbar icon to open a docked side panel. Select files/folders from the list (read from the active GitHub tab), scan, and review findings — all in one place. No popup + floating overlay workflow.
 
-## How to use selection
+## How to use
 
 1. Open a repo code page (`github.com/owner/repo` or `.../tree/branch/...`)
-2. Open RepoGuard → click **Enable checkboxes**
-3. Use the **floating panel on the right** of the GitHub page (GitHub’s own file list re-renders and would wipe in-row boxes)
-4. Tick files/folders → **Scan** enables when something is selected (panel or popup)
-5. After a panel scan, the panel shows a short finding summary; open the RepoGuard popup for full results
-6. **Hide checkboxes** (popup or panel) removes the panel; selection is kept until Clear
+2. Click the **RepoGuard** icon in the Chrome toolbar → the **side panel** opens
+3. Tick files/folders in **Select paths** (use **Refresh** if the list is empty after navigation)
+4. Click **Scan selection**
+5. Review findings in the panel; use **Export findings** to copy results
 
-Selection is stored in `chrome.storage.local` (shared by the popup, background worker, and page script). Use **Clear** on the panel to reset.
+Selection is stored in `chrome.storage.local` per owner/repo.
 
 ## Reload after this change
 
-On `chrome://extensions`, click **Reload** on RepoGuard (accept new permissions for `storage` and `github.com` if prompted). Then **refresh** any open GitHub tabs so the content script picks up the panel Scan button.
+On `chrome://extensions`, click **Reload** on RepoGuard (accept `sidePanel` if prompted). Refresh any open GitHub tabs so the content script updates.
 
 ### Permissions
 
-- `activeTab` — read the current tab URL when you open the popup  
-- `storage` — session selection memory + last scan results  
-- `api.github.com` / `raw.githubusercontent.com` — fetch file lists and contents  
-- `github.com` — content script checkboxes on the code browser  
+- `activeTab` / `scripting` — read the active tab and list paths on GitHub  
+- `storage` — selection + last scan  
+- `sidePanel` — docked extension UI  
+- `api.github.com` / `raw.githubusercontent.com` — fetch trees and file contents  
+- `github.com` — content script path discovery  
 
 ## Rate limits
 
@@ -36,13 +36,13 @@ Unauthenticated GitHub API access is roughly **60 requests/hour**. Each scan use
 
 1. Open Chrome → `chrome://extensions`
 2. Developer mode → **Load unpacked** → this folder
-3. Open a GitHub repo → Enable checkboxes → select paths → **Scan** on the panel (or in the popup)
+3. Open a GitHub repo → click RepoGuard → select paths → **Scan selection**
 
 ## Pack a zip
 
 ```bash
 cd /Users/arainajain/Desktop/RepoGuard
-zip -r ../RepoGuard.zip manifest.json popup.html popup.css popup.js background.js github.js githubApi.js languages.js findings.js rules.js scanner.js selection.js content.js content.css icons
+zip -r ../RepoGuard.zip manifest.json sidepanel.html sidepanel.css sidepanel.js background.js github.js githubApi.js languages.js findings.js rules.js scanner.js selection.js content.js icons
 ```
 
 ## Project layout
@@ -50,17 +50,14 @@ zip -r ../RepoGuard.zip manifest.json popup.html popup.css popup.js background.j
 ```
 RepoGuard/
   manifest.json
-  background.js      # MV3 service worker (panel Scan)
-  popup.html/css/js
-  content.js/css     # Selection panel on GitHub pages
-  selection.js       # Session selection helpers
-  github.js          # Parse owner/repo URLs
-  githubApi.js       # GitHub API + raw fetch
-  languages.js       # Scannable extensions
-  rules.js           # Heuristic rules
-  scanner.js         # Fetch → filter by selection → rules
-  findings.js
+  sidepanel.html/css/js   # Docked UI (select + scan + findings)
+  background.js           # Side panel behavior + RG_SCAN worker
+  content.js              # Path discovery on GitHub pages
+  selection.js
+  github.js / githubApi.js
+  languages.js / rules.js / scanner.js / findings.js
   icons/
+  tests/
 ```
 
 ### Languages scanned

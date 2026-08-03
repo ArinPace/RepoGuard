@@ -1,6 +1,5 @@
 /**
- * RepoGuard MV3 service worker — runs scans when the popup is closed
- * (e.g. Scan from the floating GitHub selection panel).
+ * RepoGuard MV3 service worker — side panel entry + shared scans.
  */
 import { scanRepository, countBySeverity } from "./findings.js";
 import { ensureGitHubAccess } from "./githubApi.js";
@@ -15,6 +14,13 @@ export const LAST_SCAN_KEY = "lastScan";
 
 /** @type {Promise<unknown> | null} */
 let scanInFlight = null;
+
+// Toolbar icon opens the side panel (no popup).
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch(() => {
+    /* older Chromium without the API — ignore */
+  });
 
 /**
  * @param {unknown} raw
@@ -78,17 +84,16 @@ function summaryMessage(summary) {
     return "Could not download file contents. Check Site access on chrome://extensions → RepoGuard.";
   }
   if (summary.total === 0) {
-    return `No heuristic matches in ${summary.filesRead} file${summary.filesRead === 1 ? "" : "s"}. Open the popup for details.`;
+    return `No heuristic matches in ${summary.filesRead} file${summary.filesRead === 1 ? "" : "s"}.`;
   }
   return (
     `${summary.total} finding${summary.total === 1 ? "" : "s"}` +
     ` (${summary.severe} severe, ${summary.moderate} moderate, ${summary.mild} mild)` +
-    ` · ${summary.filesRead} file${summary.filesRead === 1 ? "" : "s"} read. Open RepoGuard popup for details.`
+    ` · ${summary.filesRead} file${summary.filesRead === 1 ? "" : "s"} read.`
   );
 }
 
 /**
- * Persist scan payload so the popup can show full findings.
  * @param {{ owner: string, repo: string }} repoInfo
  * @param {import("./scanner.js").ScanResult} result
  * @param {ReturnType<typeof buildSummary>} summary
@@ -115,9 +120,6 @@ async function storeLastScan(repoInfo, result, summary, scannedAt) {
 }
 
 /**
- * Shared scan entry for panel + popup. Serialized via scanInFlight so only one
- * writer updates lastScan at a time.
- *
  * @param {{ owner: string, repo: string }} repoInfo
  * @param {{ selection?: unknown }} [options]
  */
@@ -129,8 +131,6 @@ async function runScan(repoInfo, options = {}) {
 
   await ensureGitHubAccess();
 
-  // Panel may pass a just-flushed selection. Popup omits it so we always read
-  // the latest durable picks from storage (avoids stale popup in-memory state).
   let selection = normalizeIncomingSelection(options.selection);
   if (!selection) {
     selection = await getSelection(owner, repo);
@@ -171,7 +171,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    // Panel may include selection; popup should omit it (background re-reads storage).
     const hasSelectionPayload = Object.prototype.hasOwnProperty.call(
       message,
       "selection",
@@ -194,6 +193,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         scanInFlight = null;
       });
 
-    return true; // async sendResponse
+    return true;
   }
 });

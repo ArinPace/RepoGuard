@@ -1,25 +1,30 @@
 import { parseGitHubRepoUrl, formatRepoLabel } from "./github.js";
-import { scannableExtensionList } from "./githubApi.js";
+import { ensureGitHubAccess, scannableExtensionList } from "./githubApi.js";
 import {
-  scanRepository,
   locationToGitHubUrl,
   countBySeverity,
 } from "./findings.js";
 import {
   getSelection,
+  setSelection,
+  clearSelection,
   selectionIsEmpty,
   selectionPickCount,
   selectionStorageKey,
+  togglePathInSelection,
+  isPathSelected,
 } from "./selection.js";
 
-/** Shared with background.js — last successful scan for popup details. */
 const LAST_SCAN_KEY = "lastScan";
 
-/** @type {{ owner: string, repo: string, pathname: string } | null} */
+/** @type {{ owner: string, repo: string, pathname?: string } | null} */
 let currentRepo = null;
 
 /** @type {import("./selection.js").RepoSelection} */
 let currentSelection = { files: [], folders: [] };
+
+/** @type {{ kind: "file" | "folder", path: string }[]} */
+let listedEntries = [];
 
 /** @type {import("./findings.js").Finding[]} */
 let currentFindings = [];
@@ -36,15 +41,17 @@ let locationsExpanded = false;
 /** @type {"severe" | "moderate" | "mild" | null} */
 let openSeverity = null;
 
-/** Whether Scan is allowed for reasons other than selection (busy, not a repo). */
 let scanContextOk = false;
+let selectionPersistChain = Promise.resolve();
+
+/** @type {"repo" | "results" | "other"} */
+let uiKind = "other";
 
 const SEVERITY_LABELS = {
   severe: "Severe",
   moderate: "Moderate",
   mild: "Mild",
 };
-
 const SEVERITY_ORDER = ["severe", "moderate", "mild"];
 
 async function getActiveTab() {
@@ -64,7 +71,7 @@ function syncScanButton() {
   const allow = scanContextOk && Boolean(currentRepo) && hasSelection;
   btn.disabled = !allow;
   if (!btn.dataset.busy) {
-    btn.textContent = "Scan repository";
+    btn.textContent = "Scan selection";
   }
 }
 
@@ -80,101 +87,25 @@ function setScanBusy(busy) {
   }
 }
 
+function syncSelectMeta() {
+  const meta = document.getElementById("selectMeta");
+  if (!meta) return;
+  const n = selectionPickCount(currentSelection);
+  const files = currentSelection.files.length;
+  const folders = currentSelection.folders.length;
+  meta.textContent =
+    n === 0
+      ? "0 selected — tick files or folders below"
+      : `${n} selected (${files} file${files === 1 ? "" : "s"}, ${folders} folder${folders === 1 ? "" : "s"})`;
+}
+
 function selectionDetailLine() {
   const n = selectionPickCount(currentSelection);
   if (n === 0) {
-    return "Click Enable checkboxes, use the RepoGuard panel on the right of the GitHub page, then Scan (panel or popup).";
+    return "Select files or folders in the list below, then Scan.";
   }
-  const files = currentSelection.files.length;
-  const folders = currentSelection.folders.length;
-  return `${n} selected this session (${files} file${files === 1 ? "" : "s"}, ${folders} folder${folders === 1 ? "" : "s"}). Scan only includes those paths.`;
+  return `Scan will include ${n} selected path${n === 1 ? "" : "s"}.`;
 }
-
-function setCheckboxActionsVisible(visible) {
-  const el = document.getElementById("checkboxActions");
-  if (el) el.hidden = !visible;
-}
-
-/**
- * Talk to the content script on the active GitHub tab.
- * If it is not loaded yet, inject content.js via chrome.scripting then retry.
- */
-async function sendCheckboxMessage(type) {
-  const tab = await getActiveTab();
-  if (!tab?.id) {
-    throw new Error("No active tab.");
-  }
-  if (!tab.url || !tab.url.includes("github.com")) {
-    throw new Error("Switch to a GitHub repository tab first.");
-  }
-
-  async function once() {
-    return chrome.tabs.sendMessage(tab.id, { type });
-  }
-
-  try {
-    return await once();
-  } catch (error) {
-    const msg = String(error?.message || error || "");
-    // No receiver, or orphaned content script after extension reload.
-    const needsInject =
-      msg.includes("Receiving end does not exist") ||
-      msg.includes("Could not establish connection") ||
-      msg.includes("Extension context invalidated");
-
-    if (!needsInject) throw error;
-
-    // Clear stale flag + inject a fresh content script, then retry.
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        try {
-          window.__REPOGUARD_API__?.destroy?.();
-        } catch {
-          /* ignore */
-        }
-        window.__REPOGUARD_CONTENT__ = false;
-        window.__REPOGUARD_API__ = null;
-      },
-    });
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["content.js"],
-    });
-    await new Promise((r) => setTimeout(r, 80));
-    return once();
-  }
-}
-
-async function handleEnableCheckboxes() {
-  const detailEl = document.getElementById("detail");
-  try {
-    const result = await sendCheckboxMessage("RG_ENABLE_CHECKBOXES");
-    if (!result?.ok) {
-      detailEl.textContent =
-        result?.error ||
-        "Could not show checkboxes. Reload the GitHub page, then try Enable again.";
-      return;
-    }
-    await refreshSelectionFromStorage();
-    detailEl.textContent = `Selection panel on (${result.count} items). Tick boxes in the panel on the right, then Scan there or here. ${selectionDetailLine()}`;
-  } catch (error) {
-    detailEl.textContent = String(error?.message || error);
-  }
-}
-
-async function handleHideCheckboxes() {
-  const detailEl = document.getElementById("detail");
-  try {
-    await sendCheckboxMessage("RG_HIDE_CHECKBOXES");
-    detailEl.textContent = `Checkboxes hidden. Selection is kept for this session. ${selectionDetailLine()}`;
-  } catch (error) {
-    detailEl.textContent = String(error?.message || error);
-  }
-}
-
-/** @type {"repo" | "results" | "other"} */
-let uiKind = "other";
 
 function renderState({ kind, title, detail }) {
   const status = document.getElementById("status");
@@ -190,18 +121,20 @@ function renderState({ kind, title, detail }) {
     results: "Scan complete",
   };
   badge.textContent = labels[kind] ?? "Not a repo";
-  badge.dataset.kind = kind === "scanning" || kind === "results" ? "repo" : kind;
+  badge.dataset.kind =
+    kind === "scanning" || kind === "results" ? "repo" : kind;
 
   if (kind === "repo" || kind === "results") uiKind = kind;
   else if (kind !== "scanning") uiKind = "other";
 
-  setCheckboxActionsVisible(kind === "repo" || kind === "results");
+  const selectSection = document.getElementById("selectSection");
+  if (selectSection) {
+    selectSection.hidden = !(kind === "repo" || kind === "results");
+  }
 
-  // Only repo / results contexts can scan — still gated by selection.
   setScanEnabled(kind === "repo" || kind === "results");
 }
 
-/** Move notes out of the finding list so re-renders don't destroy the node. */
 function parkNotes() {
   const notes = document.getElementById("notes");
   const park = document.getElementById("notesPark");
@@ -233,6 +166,21 @@ function syncExportButton() {
   }
 }
 
+function findingLocations(finding) {
+  if (finding.locations?.length) return finding.locations;
+  return [{ file: finding.file, line: finding.line }];
+}
+
+function locationLabel(loc) {
+  return `${loc.file}:${loc.line}`;
+}
+
+function formatFindingLoc(finding) {
+  const locs = findingLocations(finding);
+  if (locs.length === 1) return locationLabel(locs[0]);
+  return `${locs.length} locations`;
+}
+
 /**
  * @param {import("./findings.js").Finding[]} findings
  */
@@ -247,26 +195,21 @@ function formatFindingsExport(findings) {
     "",
   ];
 
-  const order = ["severe", "moderate", "mild"];
-  for (const severity of order) {
+  for (const severity of SEVERITY_ORDER) {
     const group = findings.filter((f) => f.severity === severity);
     if (group.length === 0) continue;
     lines.push(`## ${severity.toUpperCase()} (${group.length})`);
     lines.push("");
     for (const finding of group) {
-      const locs = finding.locations?.length
-        ? finding.locations
-        : [{ file: finding.file, line: finding.line }];
+      const locs = findingLocations(finding);
       lines.push(`[${finding.severity}] ${finding.title}`);
       if (finding.ruleId) lines.push(`Rule: ${finding.ruleId}`);
       lines.push("Locations:");
       for (const loc of locs) {
-        const url =
-          currentRepo != null
-            ? locationToGitHubUrl(currentRepo, loc, branch)
-            : `${loc.file}:${loc.line}`;
         lines.push(`  - ${loc.file}:${loc.line}`);
-        if (currentRepo) lines.push(`    ${url}`);
+        if (currentRepo) {
+          lines.push(`    ${locationToGitHubUrl(currentRepo, loc, branch)}`);
+        }
       }
       lines.push(`Why: ${finding.why || ""}`);
       lines.push(`Fix: ${finding.fix || ""}`);
@@ -274,13 +217,12 @@ function formatFindingsExport(findings) {
     }
   }
 
-  return lines.join("\n").trim() + "\n";
+  return `${lines.join("\n").trim()}\n`;
 }
 
 async function handleExportFindings() {
   const btn = document.getElementById("exportBtn");
   if (!currentFindings.length) return;
-
   const text = formatFindingsExport(currentFindings);
   try {
     await navigator.clipboard.writeText(text);
@@ -302,32 +244,25 @@ async function handleExportFindings() {
       }, 1500);
     }
     document.getElementById("detail").textContent = String(
-      error?.message || error || "Could not copy findings to the clipboard.",
+      error?.message || error || "Could not copy findings.",
     );
   }
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+function findingsBySeverity(findings) {
+  /** @type {Record<string, import("./findings.js").Finding[]>} */
+  const groups = { severe: [], moderate: [], mild: [] };
+  for (const finding of findings) {
+    groups[finding.severity].push(finding);
+  }
+  return groups;
 }
 
-function findingLocations(finding) {
-  if (finding.locations?.length) return finding.locations;
-  return [{ file: finding.file, line: finding.line }];
-}
-
-function locationLabel(loc) {
-  return `${loc.file}:${loc.line}`;
-}
-
-function formatFindingLoc(finding) {
-  const locs = findingLocations(finding);
-  if (locs.length === 1) return locationLabel(locs[0]);
-  return `${locs.length} locations`;
+function defaultOpenSeverity(counts) {
+  for (const severity of SEVERITY_ORDER) {
+    if (counts[severity] > 0) return severity;
+  }
+  return null;
 }
 
 function renderLocationPanel(finding) {
@@ -428,22 +363,6 @@ function toggleLocations() {
   renderLocationPanel(finding);
 }
 
-function findingsBySeverity(findings) {
-  /** @type {Record<string, import("./findings.js").Finding[]>} */
-  const groups = { severe: [], moderate: [], mild: [] };
-  for (const finding of findings) {
-    groups[finding.severity].push(finding);
-  }
-  return groups;
-}
-
-function defaultOpenSeverity(counts) {
-  for (const severity of SEVERITY_ORDER) {
-    if (counts[severity] > 0) return severity;
-  }
-  return null;
-}
-
 function setOpenSeverity(severity) {
   const next = openSeverity === severity ? null : severity;
   if (next !== openSeverity) {
@@ -500,14 +419,11 @@ function renderSeverityGroups(findings) {
 
     const meta = document.createElement("span");
     meta.className = "severity-meta";
-
     const countSpan = document.createElement("span");
     countSpan.textContent = String(list.length);
-
     const chevron = document.createElement("span");
     chevron.className = "severity-chevron";
     chevron.textContent = "▶";
-
     meta.append(countSpan, chevron);
     toggle.append(label, meta);
     toggle.addEventListener("click", () => setOpenSeverity(severity));
@@ -518,28 +434,23 @@ function renderSeverityGroups(findings) {
     for (const finding of list) {
       const li = document.createElement("li");
       li.className = "finding-row";
-
       const button = document.createElement("button");
       button.type = "button";
       button.className = "finding";
       button.dataset.findingId = finding.id;
       button.dataset.severity = finding.severity;
-
       const title = document.createElement("span");
       title.className = "finding-title";
       title.textContent = finding.title;
-
       const loc = document.createElement("span");
       loc.className = "finding-loc";
       loc.textContent = formatFindingLoc(finding);
-
       button.append(title, loc);
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         selectFinding(finding.id);
       });
-
       li.appendChild(button);
       ul.appendChild(li);
     }
@@ -556,43 +467,28 @@ function renderSeverityGroups(findings) {
 
 function describeScanStats(result) {
   if (result.selectionMatchedNone) {
-    return "Selected paths matched no scannable files (wrong types, empty folder, or not in the fetched tree). Adjust checkboxes and scan again.";
+    return "Selected paths matched no scannable files. Adjust selection and scan again.";
   }
-
   if (result.treeBlobCount === 0) {
-    return "GitHub returned an empty file tree (empty repo, or the default branch has no files).";
+    return "GitHub returned an empty file tree.";
   }
-
   if (result.filesAvailable === 0) {
-    return (
-      `Found ${result.treeBlobCount} file(s) in the repo, but none matched scannable types ` +
-      `(${scannableExtensionList()}). Example: a README-only repo scans 0 files. ` +
-      "Try a repo with JavaScript/Python/etc."
-    );
+    return `No scannable types in selection (${scannableExtensionList()}).`;
   }
-
   if (result.filesRead === 0 && result.filesScanned > 0) {
-    return (
-      `Found ${result.filesAvailable} eligible file(s) but could not download contents. ` +
-      "Check Site access for raw.githubusercontent.com on chrome://extensions → RepoGuard → Details."
-    );
+    return "Could not download file contents. Check Site access on chrome://extensions → RepoGuard.";
   }
-
   const capNote = result.capped
-    ? `Read ${result.filesRead} of ${result.filesAvailable} eligible files (capped at ${result.filesScanned}).`
+    ? `Read ${result.filesRead} of ${result.filesAvailable} eligible files (capped).`
     : `Read ${result.filesRead} file${result.filesRead === 1 ? "" : "s"}.`;
-
   const truncNote = result.truncated
-    ? " GitHub’s full file list was too large, so RepoGuard scanned a partial tree."
+    ? " Tree was truncated by GitHub."
     : "";
-
-  const selNote = result.selectionFiltered ? " (filtered to your selection)." : "";
-
+  const selNote = result.selectionFiltered ? " Filtered to selection." : "";
   if (result.findings.length === 0) {
-    return `No heuristic matches. ${capNote}${selNote}${truncNote} That does not mean the repo is safe.`;
+    return `No heuristic matches. ${capNote}${selNote}${truncNote}`;
   }
-
-  return `Click a finding to see why/fix under it. ${capNote}${selNote}${truncNote}`;
+  return `Click a finding for details. ${capNote}${selNote}${truncNote}`;
 }
 
 function showScanResult(result) {
@@ -602,10 +498,8 @@ function showScanResult(result) {
   selectedLocation = null;
   locationsExpanded = false;
 
-  const results = document.getElementById("results");
-  results.hidden = false;
+  document.getElementById("results").hidden = false;
   parkNotes();
-
   renderSeverityGroups(result.findings);
   syncExportButton();
 
@@ -616,52 +510,170 @@ function showScanResult(result) {
   });
 }
 
-/**
- * Persist findings so a panel-triggered scan (or popup scan) can be reviewed later.
- * @param {import("./scanner.js").ScanResult} result
- */
-async function storeLastScan(result) {
-  if (!currentRepo) return;
-  const counts = countBySeverity(result.findings);
-  await chrome.storage.local.set({
-    [LAST_SCAN_KEY]: {
-      owner: currentRepo.owner,
-      repo: currentRepo.repo,
-      scannedAt: Date.now(),
-      summary: {
-        owner: currentRepo.owner,
-        repo: currentRepo.repo,
-        total: result.findings.length,
-        severe: counts.severe,
-        moderate: counts.moderate,
-        mild: counts.mild,
-        filesRead: result.filesRead,
-        filesAvailable: result.filesAvailable,
-        filesScanned: result.filesScanned,
-        treeBlobCount: result.treeBlobCount,
-        capped: Boolean(result.capped),
-        truncated: Boolean(result.truncated),
-        selectionFiltered: Boolean(result.selectionFiltered),
-        selectionMatchedNone: Boolean(result.selectionMatchedNone),
-        defaultBranch: result.defaultBranch,
-      },
-      findings: result.findings,
-      defaultBranch: result.defaultBranch,
-      filesRead: result.filesRead,
-      filesAvailable: result.filesAvailable,
-      filesScanned: result.filesScanned,
-      treeBlobCount: result.treeBlobCount,
-      capped: Boolean(result.capped),
-      truncated: Boolean(result.truncated),
-      selectionFiltered: Boolean(result.selectionFiltered),
-      selectionMatchedNone: Boolean(result.selectionMatchedNone),
-    },
-  });
+function renderSelectList() {
+  const list = document.getElementById("selectList");
+  const empty = document.getElementById("selectEmpty");
+  list.replaceChildren();
+
+  if (listedEntries.length === 0) {
+    empty.hidden = false;
+    syncSelectMeta();
+    return;
+  }
+  empty.hidden = true;
+
+  for (const entry of listedEntries) {
+    const li = document.createElement("li");
+    li.className = "select-item";
+    li.dataset.kind = entry.kind;
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = isPathSelected(currentSelection, entry.kind, entry.path);
+
+    const body = document.createElement("div");
+    body.className = "select-item-body";
+    const kind = document.createElement("span");
+    kind.className = "select-kind";
+    kind.textContent = entry.kind;
+    const path = document.createElement("span");
+    path.className = "select-path";
+    path.textContent =
+      entry.kind === "folder" ? `${entry.path}/` : entry.path;
+    body.append(kind, path);
+
+    const applyChange = () => {
+      if (!currentRepo) return;
+      currentSelection = togglePathInSelection(
+        currentSelection,
+        entry.kind,
+        entry.path,
+        input.checked,
+      );
+      syncSelectMeta();
+      syncScanButton();
+      queuePersistSelection();
+      if (uiKind === "repo" || uiKind === "results") {
+        document.getElementById("detail").textContent = selectionDetailLine();
+      }
+    };
+
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("change", applyChange);
+    li.addEventListener("click", (event) => {
+      if (event.target === input) return;
+      input.checked = !input.checked;
+      applyChange();
+    });
+
+    li.append(input, body);
+    list.appendChild(li);
+  }
+  syncSelectMeta();
+}
+
+function queuePersistSelection() {
+  if (!currentRepo) return selectionPersistChain;
+  const owner = currentRepo.owner;
+  const repo = currentRepo.repo;
+  const snapshot = {
+    files: [...currentSelection.files],
+    folders: [...currentSelection.folders],
+  };
+  selectionPersistChain = selectionPersistChain
+    .then(() => setSelection(owner, repo, snapshot))
+    .catch(() => {
+      /* keep chain alive */
+    });
+  return selectionPersistChain;
 }
 
 /**
- * @returns {Promise<boolean>} true if restored
+ * Message the active GitHub tab's content script; inject if needed.
  */
+async function sendTabMessage(message) {
+  const tab = await getActiveTab();
+  if (!tab?.id) throw new Error("No active tab.");
+  if (!tab.url || !tab.url.includes("github.com")) {
+    throw new Error("Switch to a GitHub repository tab first.");
+  }
+
+  async function once() {
+    return chrome.tabs.sendMessage(tab.id, message);
+  }
+
+  try {
+    return await once();
+  } catch (error) {
+    const msg = String(error?.message || error || "");
+    const needsInject =
+      msg.includes("Receiving end does not exist") ||
+      msg.includes("Could not establish connection") ||
+      msg.includes("Extension context invalidated");
+    if (!needsInject) throw error;
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        try {
+          window.__REPOGUARD_API__?.destroy?.();
+        } catch {
+          /* ignore */
+        }
+        window.__REPOGUARD_CONTENT__ = false;
+        window.__REPOGUARD_API__ = null;
+      },
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content.js"],
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    return once();
+  }
+}
+
+async function refreshEntryList() {
+  const empty = document.getElementById("selectEmpty");
+  try {
+    const result = await sendTabMessage({ type: "RG_LIST_ENTRIES" });
+    if (!result?.ok) {
+      listedEntries = [];
+      renderSelectList();
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent =
+          result?.error ||
+          "Could not read files from this page. Open a repo code view and Refresh.";
+      }
+      return result;
+    }
+    listedEntries = Array.isArray(result.entries) ? result.entries : [];
+    renderSelectList();
+    return result;
+  } catch (error) {
+    listedEntries = [];
+    renderSelectList();
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = String(error?.message || error);
+    }
+    return null;
+  }
+}
+
+async function refreshSelectionFromStorage() {
+  if (!currentRepo) {
+    currentSelection = { files: [], folders: [] };
+    syncScanButton();
+    syncSelectMeta();
+    return;
+  }
+  currentSelection = await getSelection(currentRepo.owner, currentRepo.repo);
+  syncScanButton();
+  renderSelectList();
+}
+
 async function tryRestoreLastScan() {
   if (!currentRepo) return false;
   const data = await chrome.storage.local.get(LAST_SCAN_KEY);
@@ -687,16 +699,6 @@ async function tryRestoreLastScan() {
   return true;
 }
 
-async function refreshSelectionFromStorage() {
-  if (!currentRepo) {
-    currentSelection = { files: [], folders: [] };
-    syncScanButton();
-    return;
-  }
-  currentSelection = await getSelection(currentRepo.owner, currentRepo.repo);
-  syncScanButton();
-}
-
 async function handleScan() {
   if (!currentRepo) return;
   if (selectionIsEmpty(currentSelection)) {
@@ -713,16 +715,55 @@ async function handleScan() {
   renderState({
     kind: "scanning",
     title: formatRepoLabel(currentRepo),
-    detail: "Checking GitHub access, then fetching selected files…",
+    detail: "Saving selection, then scanning…",
   });
 
   try {
-    await ensureGitHubAccess();
-    const result = await scanRepository(currentRepo, {
+    await selectionPersistChain;
+    await setSelection(
+      currentRepo.owner,
+      currentRepo.repo,
+      currentSelection,
+    );
+
+    const response = await chrome.runtime.sendMessage({
+      type: "RG_SCAN",
+      owner: currentRepo.owner,
+      repo: currentRepo.repo,
       selection: currentSelection,
     });
-    await storeLastScan(result);
-    showScanResult(result);
+
+    if (!response?.ok) {
+      throw new Error(response?.error || "Scan failed.");
+    }
+
+    const data = await chrome.storage.local.get(LAST_SCAN_KEY);
+    const last = data[LAST_SCAN_KEY];
+    if (
+      last &&
+      last.owner === currentRepo.owner &&
+      last.repo === currentRepo.repo &&
+      Array.isArray(last.findings)
+    ) {
+      showScanResult({
+        findings: last.findings,
+        defaultBranch: last.defaultBranch || "main",
+        filesRead: last.filesRead ?? 0,
+        filesAvailable: last.filesAvailable ?? 0,
+        filesScanned: last.filesScanned ?? 0,
+        treeBlobCount: last.treeBlobCount ?? 0,
+        capped: Boolean(last.capped),
+        truncated: Boolean(last.truncated),
+        selectionFiltered: Boolean(last.selectionFiltered),
+        selectionMatchedNone: Boolean(last.selectionMatchedNone),
+      });
+    } else {
+      renderState({
+        kind: "results",
+        title: formatRepoLabel(currentRepo),
+        detail: response.message || "Scan complete.",
+      });
+    }
   } catch (error) {
     renderState({
       kind: "error",
@@ -738,7 +779,6 @@ async function handleOpenOnGitHub() {
   if (!currentRepo || !selectedFindingId) return;
   const finding = currentFindings.find((item) => item.id === selectedFindingId);
   if (!finding) return;
-
   const loc =
     selectedLocation ||
     findingLocations(finding)[0] ||
@@ -747,11 +787,23 @@ async function handleOpenOnGitHub() {
   await chrome.tabs.create({ url });
 }
 
+async function handleClearSelection() {
+  if (!currentRepo) return;
+  await selectionPersistChain;
+  currentSelection = await clearSelection(currentRepo.owner, currentRepo.repo);
+  renderSelectList();
+  syncScanButton();
+  document.getElementById("detail").textContent = selectionDetailLine();
+}
+
 async function detectActivePage() {
   clearResults();
   currentRepo = null;
   currentSelection = { files: [], folders: [] };
+  listedEntries = [];
   setScanEnabled(false);
+  document.getElementById("selectSection").hidden = true;
+  renderSelectList();
 
   const tab = await getActiveTab();
   const url = tab?.url;
@@ -761,18 +813,21 @@ async function detectActivePage() {
       kind: "blocked",
       title: "Can't read this tab",
       detail:
-        "Chrome hides some page URLs (settings, Web Store, new tab). Open a normal https://github.com/... page and try again.",
+        "Chrome hides some page URLs. Open a normal https://github.com/... tab.",
     });
     return;
   }
 
   const repo = parseGitHubRepoUrl(url);
-
   if (repo) {
     currentRepo = repo;
     await refreshSelectionFromStorage();
+    await refreshEntryList();
     const restored = await tryRestoreLastScan();
-    if (restored) return;
+    if (restored) {
+      document.getElementById("selectSection").hidden = false;
+      return;
+    }
     renderState({
       kind: "repo",
       title: formatRepoLabel(repo),
@@ -793,7 +848,7 @@ async function detectActivePage() {
       kind: "github",
       title: "GitHub, but not a repo",
       detail:
-        "You're on GitHub, but this URL isn't owner/repo (e.g. a profile, search, or settings page).",
+        "Open a repository like github.com/owner/repo (code browser), then use this panel.",
     });
     return;
   }
@@ -801,7 +856,7 @@ async function detectActivePage() {
   renderState({
     kind: "other",
     title: "Not on GitHub",
-    detail: "Open a repository like github.com/owner/repo, then click RepoGuard again.",
+    detail: "Open a GitHub repository, then click the RepoGuard icon again.",
   });
 }
 
@@ -817,32 +872,28 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  document.getElementById("enableChecksBtn").addEventListener("click", () => {
-    handleEnableCheckboxes().catch((error) => {
+  document.getElementById("refreshListBtn").addEventListener("click", () => {
+    refreshEntryList().catch((error) => {
       document.getElementById("detail").textContent = String(
         error?.message || error,
       );
     });
   });
 
-  document.getElementById("hideChecksBtn").addEventListener("click", () => {
-    handleHideCheckboxes().catch((error) => {
+  document.getElementById("clearSelBtn").addEventListener("click", () => {
+    handleClearSelection().catch((error) => {
       document.getElementById("detail").textContent = String(
         error?.message || error,
       );
-    });
-  });
-
-  document.getElementById("openBtn").addEventListener("click", () => {
-    handleOpenOnGitHub().catch(() => {
-      /* ignore — popup may close when opening a tab */
     });
   });
 
   document.getElementById("exportBtn").addEventListener("click", () => {
-    handleExportFindings().catch(() => {
-      /* clipboard / focus edge cases */
-    });
+    handleExportFindings().catch(() => {});
+  });
+
+  document.getElementById("openBtn").addEventListener("click", () => {
+    handleOpenOnGitHub().catch(() => {});
   });
 
   document.getElementById("notesLocToggle").addEventListener("click", (event) => {
@@ -882,14 +933,20 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!changes[key]) return;
     refreshSelectionFromStorage().then(() => {
       if (uiKind !== "repo" && uiKind !== "results") return;
-      renderState({
-        kind: uiKind,
-        title: formatRepoLabel(currentRepo),
-        detail:
-          uiKind === "results"
-            ? `Selection updated. ${selectionDetailLine()}`
-            : selectionDetailLine(),
-      });
+      document.getElementById("detail").textContent = selectionDetailLine();
+    });
+  });
+
+  chrome.tabs.onActivated.addListener(() => {
+    detectActivePage().catch(() => {});
+  });
+
+  chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+    if (info.status !== "complete" && !info.url) return;
+    chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+      if (tabs[0]?.id === tabId) {
+        detectActivePage().catch(() => {});
+      }
     });
   });
 

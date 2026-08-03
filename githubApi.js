@@ -22,7 +22,7 @@ export const GITHUB_ACCESS_HELP =
 
 /**
  * Unpacked installs often grant host access quietly (no Chrome prompt).
- * If the user revoked site access, request it again when possible (popup
+ * If the user revoked site access, request it again when possible (side panel
  * user-gesture). From a service worker, request may be unavailable — then
  * we surface the guided Site access message instead of a generic network error.
  */
