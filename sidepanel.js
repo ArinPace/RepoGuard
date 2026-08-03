@@ -787,6 +787,26 @@ async function handleOpenOnGitHub() {
   await chrome.tabs.create({ url });
 }
 
+async function handleSelectAll() {
+  if (!currentRepo || listedEntries.length === 0) return;
+  await selectionPersistChain;
+  let next = {
+    files: [...(currentSelection.files || [])],
+    folders: [...(currentSelection.folders || [])],
+  };
+  for (const entry of listedEntries) {
+    next = togglePathInSelection(next, entry.kind, entry.path, true);
+  }
+  currentSelection = await setSelection(
+    currentRepo.owner,
+    currentRepo.repo,
+    next,
+  );
+  renderSelectList();
+  syncScanButton();
+  document.getElementById("detail").textContent = selectionDetailLine();
+}
+
 async function handleClearSelection() {
   if (!currentRepo) return;
   await selectionPersistChain;
@@ -874,6 +894,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("refreshListBtn").addEventListener("click", () => {
     refreshEntryList().catch((error) => {
+      document.getElementById("detail").textContent = String(
+        error?.message || error,
+      );
+    });
+  });
+
+  document.getElementById("selectAllBtn").addEventListener("click", () => {
+    handleSelectAll().catch((error) => {
       document.getElementById("detail").textContent = String(
         error?.message || error,
       );
