@@ -416,6 +416,25 @@ h1 {
   line-height: 1.45;
 }
 
+.setup-advanced {
+  margin-top: 12px;
+  border-radius: 8px;
+  border: 1px solid #21262d;
+  background: #161b22;
+  padding: 8px 10px;
+}
+
+.setup-advanced summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #c9d1d9;
+}
+
+.setup-advanced .setup-steps {
+  margin-top: 10px;
+}
+
 .setup-step-text {
   min-width: 0;
   display: flex;

@@ -97,8 +97,8 @@
           <button type="button" class="setup-close" id="setupCloseBtn" aria-label="Close">×</button>
         </header>
         <p class="setup-lead">
-          Download only what you still need, install it, then start the helper.
-          Nothing downloads until you click a button.
+          Install Docker + Node if you still need them, then start the helper with one click.
+          Nothing downloads until you ask.
         </p>
 
         <ul class="setup-checklist" id="setupChecklist">
@@ -112,7 +112,7 @@
           </li>
           <li data-key="helperDownloaded" data-state="todo">
             <span class="setup-check-mark" aria-hidden="true">○</span>
-            <span>RepoGuard helper downloaded</span>
+            <span>RepoGuard helper ready</span>
           </li>
           <li data-key="helperOnline" data-state="todo">
             <span class="setup-check-mark" aria-hidden="true">○</span>
@@ -124,44 +124,54 @@
           </li>
         </ul>
 
-        <ol class="setup-steps">
-          <li>
-            <div class="setup-step-text">
-              <strong>Docker Desktop</strong>
-              <span id="setupDockerHint">Open the .dmg and drag Docker to Applications</span>
-            </div>
-            <button type="button" class="secondary-btn" id="setupDockerBtn">Download</button>
-          </li>
-          <li>
-            <div class="setup-step-text">
-              <strong>Node.js</strong>
-              <span>Install the LTS macOS .pkg, then quit/reopen Terminal if needed</span>
-            </div>
-            <button type="button" class="secondary-btn" id="setupNodeBtn">Download</button>
-          </li>
-          <li>
-            <div class="setup-step-text">
-              <strong>RepoGuard helper</strong>
-              <span id="setupHelperHint">macOS may block it — use Right‑click → Open → Open</span>
-            </div>
-            <div class="setup-step-btns">
-              <button type="button" class="secondary-btn" id="setupHelperBtn">Download</button>
-              <button type="button" class="secondary-btn" id="setupRevealBtn" hidden>
-                Show in Finder
-              </button>
-            </div>
-          </li>
-        </ol>
-
-        <button type="button" class="secondary-btn setup-all-btn" id="setupAllBtn">
-          Download missing only
+        <button type="button" class="scan-btn setup-all-btn" id="setupStartHelperBtn">
+          Start helper
+        </button>
+        <button type="button" class="secondary-btn setup-all-btn" id="setupAllowBtn">
+          Open Mac Privacy settings (Open Anyway)
         </button>
 
         <p class="setup-gatekeeper" id="setupGatekeeper">
-          If Mac says the helper “could not be verified”: Finder → Downloads →
-          <strong>Right‑click</strong> the helper → <strong>Open</strong> → <strong>Open</strong>.
-          Do not click Move to Bin.
+          <strong>Start helper</strong> downloads and opens the starter for you.
+          If Mac shows “Apple could not verify”, click <strong>Done</strong>, then
+          <strong>Open Anyway</strong> in Privacy &amp; Security (button above opens it).
+          That is Apple’s normal allow path — no Finder digging.
         </p>
+
+        <details class="setup-advanced">
+          <summary>Need Docker / Node downloads?</summary>
+          <ol class="setup-steps">
+            <li>
+              <div class="setup-step-text">
+                <strong>Docker Desktop</strong>
+                <span id="setupDockerHint">Open the .dmg and install if you don’t have Docker yet</span>
+              </div>
+              <button type="button" class="secondary-btn" id="setupDockerBtn">Download</button>
+            </li>
+            <li>
+              <div class="setup-step-text">
+                <strong>Node.js</strong>
+                <span>Install the LTS macOS .pkg if Node isn’t installed yet</span>
+              </div>
+              <button type="button" class="secondary-btn" id="setupNodeBtn">Download</button>
+            </li>
+            <li>
+              <div class="setup-step-text">
+                <strong>Show helper in Finder</strong>
+                <span id="setupHelperHint">Only if you want to open it manually</span>
+              </div>
+              <div class="setup-step-btns">
+                <button type="button" class="secondary-btn" id="setupHelperBtn">Re-download</button>
+                <button type="button" class="secondary-btn" id="setupRevealBtn" hidden>
+                  Show in Finder
+                </button>
+              </div>
+            </li>
+          </ol>
+          <button type="button" class="secondary-btn setup-all-btn" id="setupAllBtn">
+            Download missing only
+          </button>
+        </details>
 
         <p class="setup-note" id="setupNote">
           Waiting for the helper… this checklist updates automatically.

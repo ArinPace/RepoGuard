@@ -1005,7 +1005,7 @@ function renderSetupChecklist() {
       "helperOnline",
       setupProgress.helperDownloadedAt ? "busy" : "todo",
       setupProgress.helperDownloadedAt
-        ? "Waiting for helper — Right‑click → Open the .command file"
+        ? "Waiting for helper — use Start helper, then Open Anyway if Mac asks"
         : "Helper not running yet",
     );
     setChecklistItem("dockerReady", "todo", "Docker daemon not checked yet");
@@ -1033,6 +1033,56 @@ function syncSetupButtons() {
     helperBtn.textContent = setupProgress.helperDownloadedAt
       ? "Download again"
       : "Download";
+  }
+}
+
+async function startHelperFromUi() {
+  const note = document.getElementById("setupNote");
+  const platform = getSetupPlatform();
+  if (note) {
+    note.textContent = "Starting helper…";
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "RG_OPEN_HELPER",
+      helperPath: platform.helperPath,
+      helperFilename: platform.helperFilename,
+      downloadId: setupProgress.helperDownloadId,
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Could not start helper");
+    }
+    if (response.downloadId) {
+      await saveSetupProgress({
+        helperDownloadedAt: Date.now(),
+        helperDownloadId: response.downloadId,
+      });
+    }
+    if (response.opened) {
+      if (note) {
+        note.textContent =
+          "Opened the helper. If Mac blocks it, click Done, then “Open Mac Privacy settings” → Open Anyway.";
+      }
+      // Proactively open Privacy settings on Mac after a beat (Open Anyway appears there).
+      if (platform.os === "mac") {
+        setTimeout(() => {
+          chrome.runtime.sendMessage({ type: "RG_OPEN_MAC_PRIVACY" }).catch(() => {});
+        }, 1500);
+      }
+    } else {
+      if (note) {
+        note.textContent =
+          "Helper is downloaded. Click “Open Mac Privacy settings”, then Open Anyway for Start-RepoGuard-Agent.";
+      }
+      if (platform.os === "mac") {
+        chrome.runtime.sendMessage({ type: "RG_OPEN_MAC_PRIVACY" }).catch(() => {});
+      }
+    }
+    renderSetupChecklist();
+    return response;
+  } catch (error) {
+    if (note) note.textContent = String(error?.message || error);
+    throw error;
   }
 }
 
@@ -1551,6 +1601,17 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("setupAllBtn").addEventListener("click", () => {
     requestSetupDownload("missing").catch(() => {});
   });
+  document.getElementById("setupStartHelperBtn").addEventListener("click", () => {
+    startHelperFromUi().catch(() => {});
+  });
+  document.getElementById("setupAllowBtn").addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "RG_OPEN_MAC_PRIVACY" }).catch(() => {});
+    const note = document.getElementById("setupNote");
+    if (note) {
+      note.textContent =
+        "Privacy & Security opened. Find Start-RepoGuard-Agent and click Open Anyway, then return here.";
+    }
+  });
   document.getElementById("setupRevealBtn").addEventListener("click", () => {
     const id = setupProgress.helperDownloadId;
     if (!id) return;
@@ -1585,7 +1646,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (note) {
           note.textContent =
-            "Helper not detected yet. After installs: Finder → Right‑click the helper → Open → Open.";
+            "Helper not detected yet. Click Start helper, then Open Anyway in Privacy settings if Mac asks.";
         }
       })
       .catch(() => {});

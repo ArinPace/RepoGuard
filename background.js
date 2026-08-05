@@ -370,6 +370,117 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "RG_OPEN_MAC_PRIVACY") {
+    // Opens Privacy & Security so the user can click Apple's "Open Anyway".
+    const urls = [
+      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
+      "x-apple.systempreferences:com.apple.preference.security?Privacy",
+    ];
+    chrome.tabs
+      .create({ url: urls[0] })
+      .then(() => sendResponse({ ok: true }))
+      .catch(() =>
+        chrome.tabs
+          .create({ url: urls[1] })
+          .then(() => sendResponse({ ok: true }))
+          .catch((error) =>
+            sendResponse({ ok: false, error: String(error?.message || error) }),
+          ),
+      );
+    return true;
+  }
+
+  if (message.type === "RG_OPEN_HELPER") {
+    const helperPath = String(
+      message.helperPath || "bootstrap/Start-RepoGuard-Agent.command",
+    );
+    const helperName = String(
+      message.helperFilename || "Start-RepoGuard-Agent.command",
+    );
+    const existingId = Number(message.downloadId);
+
+    const waitUntilComplete = (downloadId) =>
+      new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          chrome.downloads.onChanged.removeListener(onChanged);
+          reject(new Error("Timed out waiting for helper download"));
+        }, 60_000);
+
+        function onChanged(delta) {
+          if (delta.id !== downloadId) return;
+          if (delta.state?.current === "complete") {
+            clearTimeout(timeout);
+            chrome.downloads.onChanged.removeListener(onChanged);
+            resolve(downloadId);
+          } else if (delta.state?.current === "interrupted") {
+            clearTimeout(timeout);
+            chrome.downloads.onChanged.removeListener(onChanged);
+            reject(new Error("Helper download interrupted"));
+          }
+        }
+
+        chrome.downloads.search({ id: downloadId }, (results) => {
+          const item = results?.[0];
+          if (item?.state === "complete") {
+            clearTimeout(timeout);
+            resolve(downloadId);
+            return;
+          }
+          chrome.downloads.onChanged.addListener(onChanged);
+        });
+      });
+
+    const openDownload = (downloadId) =>
+      new Promise((resolve, reject) => {
+        chrome.downloads.open(downloadId, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(downloadId);
+        });
+      });
+
+    (async () => {
+      let downloadId = Number.isFinite(existingId) ? existingId : null;
+      if (downloadId) {
+        const found = await new Promise((resolve) => {
+          chrome.downloads.search({ id: downloadId }, (results) => {
+            resolve(results?.[0] || null);
+          });
+        });
+        if (!found || found.state === "interrupted") {
+          downloadId = null;
+        }
+      }
+      if (!downloadId) {
+        downloadId = await downloadHelperFile(helperPath, helperName);
+      }
+      await waitUntilComplete(downloadId);
+      try {
+        await openDownload(downloadId);
+        sendResponse({
+          ok: true,
+          downloadId,
+          opened: true,
+          privacyHint: true,
+        });
+      } catch (openError) {
+        // Still return downloadId so UI can show Finder / Privacy settings.
+        sendResponse({
+          ok: true,
+          downloadId,
+          opened: false,
+          error: String(openError?.message || openError),
+          privacyHint: true,
+        });
+      }
+    })().catch((error) => {
+      sendResponse({ ok: false, error: String(error?.message || error) });
+    });
+    return true;
+  }
+
   if (message.type === "RG_SETUP_DOWNLOAD") {
     const kind = String(message.kind || "helper");
     const platform =
