@@ -851,8 +851,152 @@ function setAgentPill(state, label) {
   pill.textContent = label;
 }
 
-const INSTALL_ONE_LINER =
-  "curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash";
+/** @type {((value: boolean) => void) | null} */
+let setupWaitResolve = null;
+
+function getSetupPlatform() {
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const isMac = /Mac/i.test(ua) || /Mac/i.test(platform);
+  const isWin = /Win/i.test(ua) || /Win/i.test(platform);
+  // Default Mac downloads to Apple Silicon; Intel Macs can re-download from docker.com if needed.
+  const archArm = true;
+
+  if (isMac) {
+    return {
+      os: "mac",
+      dockerUrl: archArm
+        ? "https://desktop.docker.com/mac/main/arm64/Docker.dmg"
+        : "https://desktop.docker.com/mac/main/amd64/Docker.dmg",
+      dockerFilename: "Docker.dmg",
+      nodeUrl: "https://nodejs.org/en/download",
+      helperPath: "bootstrap/Start-RepoGuard-Agent.command",
+      helperFilename: "Start-RepoGuard-Agent.command",
+    };
+  }
+  if (isWin) {
+    return {
+      os: "windows",
+      dockerUrl:
+        "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe",
+      dockerFilename: "DockerDesktopInstaller.exe",
+      nodeUrl: "https://nodejs.org/en/download",
+      helperPath: "bootstrap/Start-RepoGuard-Agent.bat",
+      helperFilename: "Start-RepoGuard-Agent.bat",
+    };
+  }
+  return {
+    os: "linux",
+    dockerUrl: "https://docs.docker.com/desktop/setup/install/linux/",
+    dockerFilename: "",
+    nodeUrl: "https://nodejs.org/en/download",
+    helperPath: "bootstrap/Start-RepoGuard-Agent.command",
+    helperFilename: "Start-RepoGuard-Agent.command",
+  };
+}
+
+function showSetupModal() {
+  const overlay = document.getElementById("setupOverlay");
+  if (overlay) overlay.hidden = false;
+}
+
+function hideSetupModal(cancel = true) {
+  const overlay = document.getElementById("setupOverlay");
+  if (overlay) overlay.hidden = true;
+  if (cancel && setupWaitResolve) {
+    const resolve = setupWaitResolve;
+    setupWaitResolve = null;
+    resolve(false);
+  }
+}
+
+/**
+ * @param {"docker" | "node" | "helper" | "all"} kind
+ */
+async function requestSetupDownload(kind) {
+  const note = document.getElementById("setupNote");
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "RG_SETUP_DOWNLOAD",
+      kind,
+      platform: getSetupPlatform(),
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Download failed");
+    }
+    if (note) {
+      if (kind === "all") {
+        note.textContent =
+          "Downloads started. Install Docker + Node from your Downloads folder / opened tabs, then double-click the RepoGuard helper.";
+      } else if (kind === "docker") {
+        note.textContent =
+          "Docker download started (or install page opened). Install it, then download Node and the helper.";
+      } else if (kind === "node") {
+        note.textContent =
+          "Opened the Node.js download page. Install the LTS build, then download the helper.";
+      } else {
+        note.textContent =
+          "Helper downloaded. After Docker + Node are installed, double-click the helper file in Downloads.";
+      }
+    }
+    return response;
+  } catch (error) {
+    if (note) {
+      note.textContent = String(error?.message || error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Show setup popup and wait until helper is online or user cancels.
+ * @param {{ timeoutMs?: number }} [opts]
+ */
+async function ensureAgentReady(opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+  await refreshAgentHealth();
+  if (agentOnline) return true;
+
+  setBuildStatus("Setup needed — use the download popup…", "busy");
+  showSetupModal();
+
+  // Auto-start “Download all” so one click from Test production kicks off downloads.
+  requestSetupDownload("all").catch(() => {});
+
+  const started = Date.now();
+  return new Promise((resolve) => {
+    setupWaitResolve = resolve;
+
+    const tick = async () => {
+      if (!setupWaitResolve) return;
+      await refreshAgentHealth();
+      if (agentOnline) {
+        const done = setupWaitResolve;
+        setupWaitResolve = null;
+        hideSetupModal(false);
+        setBuildStatus("Helper ready — starting production test…", "busy");
+        done(true);
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        const done = setupWaitResolve;
+        setupWaitResolve = null;
+        hideSetupModal(false);
+        done(false);
+        return;
+      }
+      const left = Math.ceil((timeoutMs - (Date.now() - started)) / 1000);
+      const note = document.getElementById("setupNote");
+      if (note && !note.textContent.includes("Download")) {
+        /* keep download feedback */
+      }
+      setBuildStatus(`Waiting for helper… (${left}s)`, "busy");
+      setTimeout(tick, 2000);
+    };
+
+    tick();
+  });
+}
 
 async function refreshAgentHealth() {
   try {
@@ -880,7 +1024,7 @@ async function refreshAgentHealth() {
       const hint = document.getElementById("buildHint");
       if (hint) {
         hint.textContent =
-          "Click Test production — first time it will download a starter (Docker + Node required once).";
+          "Click Test production — a popup lets you download Docker, Node, and the helper.";
       }
     }
   } catch {
@@ -907,64 +1051,6 @@ function setBuildStatus(text, kind) {
   statusEl.hidden = false;
   statusEl.dataset.kind = kind;
   statusEl.textContent = text;
-}
-
-/**
- * @param {string | null} text
- */
-function setBuildSetup(text) {
-  const el = document.getElementById("buildSetup");
-  if (!el) return;
-  if (!text) {
-    el.hidden = true;
-    el.textContent = "";
-    return;
-  }
-  el.hidden = false;
-  el.textContent = text;
-}
-
-/**
- * Wait until local agent answers health, optionally prompting bootstrap.
- * @param {{ timeoutMs?: number }} [opts]
- */
-async function ensureAgentReady(opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? 180_000;
-  await refreshAgentHealth();
-  if (agentOnline) return true;
-
-  setBuildStatus("First-time setup: downloading starter…", "busy");
-  const boot = await chrome.runtime.sendMessage({ type: "RG_DOWNLOAD_BOOTSTRAP" });
-  const cmd = boot?.installCommand || INSTALL_ONE_LINER;
-  setBuildSetup(
-    "Chrome can’t start Docker by itself. Run this once in Terminal, then wait — this panel continues automatically:\n\n" +
-      cmd +
-      "\n\n(Also downloaded Start-RepoGuard-Agent.command — double-click after chmod +x if you prefer.)",
-  );
-
-  try {
-    await navigator.clipboard.writeText(cmd);
-    setBuildStatus(
-      "Setup command copied. Paste in Terminal, then wait here…",
-      "busy",
-    );
-  } catch {
-    setBuildStatus("Run the setup command in Terminal, then wait here…", "busy");
-  }
-
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 2000));
-    await refreshAgentHealth();
-    if (agentOnline) {
-      setBuildSetup(null);
-      setBuildStatus("Helper ready — starting production test…", "busy");
-      return true;
-    }
-    const left = Math.max(0, Math.ceil((timeoutMs - (Date.now() - started)) / 1000));
-    setBuildStatus(`Waiting for helper… (${left}s)`, "busy");
-  }
-  return false;
 }
 
 /**
@@ -1054,14 +1140,13 @@ async function handleBuildCheck() {
     logEl.hidden = false;
     logEl.textContent = "";
   }
-  setBuildSetup(null);
   setBuildStatus("Starting production test…", "busy");
 
   try {
     const ready = await ensureAgentReady();
     if (!ready) {
       throw new Error(
-        "Helper did not come online in time. Install Docker Desktop + Node, run the setup command, then click Test production again.",
+        "Helper did not come online in time. Use the download popup, install Docker + Node, double-click the helper, then click Test production again.",
       );
     }
 
@@ -1273,6 +1358,44 @@ document.addEventListener("DOMContentLoaded", () => {
       stopBuildPoll();
       syncBuildButton();
     });
+  });
+
+  document.getElementById("setupDockerBtn").addEventListener("click", () => {
+    requestSetupDownload("docker").catch(() => {});
+  });
+  document.getElementById("setupNodeBtn").addEventListener("click", () => {
+    requestSetupDownload("node").catch(() => {});
+  });
+  document.getElementById("setupHelperBtn").addEventListener("click", () => {
+    requestSetupDownload("helper").catch(() => {});
+  });
+  document.getElementById("setupAllBtn").addEventListener("click", () => {
+    requestSetupDownload("all").catch(() => {});
+  });
+  document.getElementById("setupCloseBtn").addEventListener("click", () => {
+    hideSetupModal(true);
+  });
+  document.getElementById("setupCancelBtn").addEventListener("click", () => {
+    hideSetupModal(true);
+  });
+  document.getElementById("setupContinueBtn").addEventListener("click", () => {
+    refreshAgentHealth()
+      .then(() => {
+        const note = document.getElementById("setupNote");
+        if (agentOnline && setupWaitResolve) {
+          const done = setupWaitResolve;
+          setupWaitResolve = null;
+          hideSetupModal(false);
+          setBuildStatus("Helper ready — starting production test…", "busy");
+          done(true);
+          return;
+        }
+        if (note) {
+          note.textContent =
+            "Helper not detected yet. Finish installing Docker + Node, double-click the downloaded helper, then click Continue again.";
+        }
+      })
+      .catch(() => {});
   });
 
   refreshAgentHealth().catch(() => {});

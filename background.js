@@ -18,6 +18,77 @@ export const AGENT_BASE_URL = "http://127.0.0.1:3847";
 /** @type {Promise<unknown> | null} */
 let scanInFlight = null;
 
+/**
+ * @returns {{
+ *   dockerUrl: string,
+ *   dockerFilename: string,
+ *   nodeUrl: string,
+ *   helperPath: string,
+ *   helperFilename: string,
+ *   os: string,
+ * }}
+ */
+function detectSetupPlatform() {
+  const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+  const isMac = /Mac|Darwin/i.test(ua);
+  const isWin = /Win/i.test(ua);
+  const isArm = /ARM|aarch64|Apple Silicon/i.test(ua) || (isMac && !/Intel/i.test(ua));
+
+  if (isMac) {
+    return {
+      os: "mac",
+      dockerUrl: isArm
+        ? "https://desktop.docker.com/mac/main/arm64/Docker.dmg"
+        : "https://desktop.docker.com/mac/main/amd64/Docker.dmg",
+      dockerFilename: "Docker.dmg",
+      nodeUrl: "https://nodejs.org/en/download",
+      helperPath: "bootstrap/Start-RepoGuard-Agent.command",
+      helperFilename: "Start-RepoGuard-Agent.command",
+    };
+  }
+
+  if (isWin) {
+    return {
+      os: "windows",
+      dockerUrl:
+        "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe",
+      dockerFilename: "DockerDesktopInstaller.exe",
+      nodeUrl: "https://nodejs.org/en/download",
+      helperPath: "bootstrap/Start-RepoGuard-Agent.bat",
+      helperFilename: "Start-RepoGuard-Agent.bat",
+    };
+  }
+
+  return {
+    os: "linux",
+    dockerUrl: "https://docs.docker.com/desktop/setup/install/linux/",
+    dockerFilename: "",
+    nodeUrl: "https://nodejs.org/en/download",
+    helperPath: "bootstrap/Start-RepoGuard-Agent.command",
+    helperFilename: "Start-RepoGuard-Agent.command",
+  };
+}
+
+/**
+ * @param {string} url
+ * @param {string} [filename]
+ * @returns {Promise<number>}
+ */
+function downloadUrl(url, filename) {
+  return new Promise((resolve, reject) => {
+    /** @type {chrome.downloads.DownloadOptions} */
+    const opts = { url, saveAs: false };
+    if (filename) opts.filename = filename;
+    chrome.downloads.download(opts, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(downloadId);
+    });
+  });
+}
+
 // Toolbar icon opens the side panel (no popup).
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -252,32 +323,79 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "RG_DOWNLOAD_BOOTSTRAP") {
-    const url = chrome.runtime.getURL(
-      "bootstrap/Start-RepoGuard-Agent.command",
-    );
-    chrome.downloads.download(
-      {
-        url,
-        filename: "Start-RepoGuard-Agent.command",
-        saveAs: false,
-      },
-      (downloadId) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({
-            ok: false,
-            error: chrome.runtime.lastError.message,
-          });
-          return;
-        }
+  if (message.type === "RG_SETUP_DOWNLOAD") {
+    const kind = String(message.kind || "helper");
+    const platform =
+      message.platform && typeof message.platform === "object"
+        ? message.platform
+        : detectSetupPlatform();
+
+    /** @type {{ ok: boolean, downloads?: object[], opened?: string[], error?: string }} */
+    const result = { ok: true, downloads: [], opened: [] };
+
+    const queue = [];
+
+    if (kind === "docker" || kind === "all") {
+      const dockerUrl = String(platform.dockerUrl || "");
+      const dockerFilename = String(platform.dockerFilename || "");
+      if (/docs\.docker\.com/i.test(dockerUrl) || !dockerFilename) {
+        queue.push(() =>
+          chrome.tabs.create({ url: dockerUrl }).then(() => {
+            result.opened.push(dockerUrl);
+          }),
+        );
+      } else {
+        queue.push(() =>
+          downloadUrl(dockerUrl, dockerFilename).then((id) => {
+            result.downloads.push({
+              kind: "docker",
+              id,
+              filename: dockerFilename,
+            });
+          }),
+        );
+      }
+    }
+
+    if (kind === "node" || kind === "all") {
+      const nodeUrl = String(platform.nodeUrl || "https://nodejs.org/en/download");
+      queue.push(() =>
+        chrome.tabs.create({ url: nodeUrl }).then(() => {
+          result.opened.push(nodeUrl);
+        }),
+      );
+    }
+
+    if (kind === "helper" || kind === "all") {
+      const helperPath = String(
+        platform.helperPath || "bootstrap/Start-RepoGuard-Agent.command",
+      );
+      const helperName = String(
+        platform.helperFilename || "Start-RepoGuard-Agent.command",
+      );
+      queue.push(() =>
+        downloadUrl(chrome.runtime.getURL(helperPath), helperName).then((id) => {
+          result.downloads.push({ kind: "helper", id, filename: helperName });
+        }),
+      );
+    }
+
+    if (!queue.length) {
+      sendResponse({ ok: false, error: "Unknown setup download kind" });
+      return false;
+    }
+
+    queue
+      .reduce((p, fn) => p.then(fn), Promise.resolve())
+      .then(() => sendResponse(result))
+      .catch((error) => {
         sendResponse({
-          ok: true,
-          downloadId,
-          installCommand:
-            "curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash",
+          ok: false,
+          error: String(error?.message || error),
+          downloads: result.downloads,
+          opened: result.opened,
         });
-      },
-    );
+      });
     return true;
   }
 

@@ -57,7 +57,6 @@
           Test production
         </button>
         <p class="build-status" id="buildStatus" hidden></p>
-        <pre class="build-setup" id="buildSetup" hidden></pre>
         <pre class="build-log" id="buildLog" hidden></pre>
       </section>
 
@@ -90,6 +89,55 @@
         <div class="severity-groups" id="severityGroups"></div>
       </section>
     </main>
+
+    <div class="setup-overlay" id="setupOverlay" hidden>
+      <div class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+        <header class="setup-header">
+          <h2 id="setupTitle">Download requirements</h2>
+          <button type="button" class="setup-close" id="setupCloseBtn" aria-label="Close">×</button>
+        </header>
+        <p class="setup-lead">
+          Test production needs Docker, Node.js, and a small local helper.
+          Click to download each one, install them, then start the helper.
+        </p>
+        <ol class="setup-steps">
+          <li>
+            <div class="setup-step-text">
+              <strong>Docker Desktop</strong>
+              <span>Runs the build in an isolated container</span>
+            </div>
+            <button type="button" class="secondary-btn" id="setupDockerBtn">Download</button>
+          </li>
+          <li>
+            <div class="setup-step-text">
+              <strong>Node.js</strong>
+              <span>Runs the RepoGuard helper on your machine</span>
+            </div>
+            <button type="button" class="secondary-btn" id="setupNodeBtn">Download</button>
+          </li>
+          <li>
+            <div class="setup-step-text">
+              <strong>RepoGuard helper</strong>
+              <span>Double-click the downloaded starter after Docker + Node are installed</span>
+            </div>
+            <button type="button" class="secondary-btn" id="setupHelperBtn">Download</button>
+          </li>
+        </ol>
+        <button type="button" class="scan-btn setup-all-btn" id="setupAllBtn">
+          Download all
+        </button>
+        <p class="setup-note" id="setupNote">
+          After installs finish, double-click the helper file. This window waits automatically.
+        </p>
+        <div class="setup-actions">
+          <button type="button" class="secondary-btn" id="setupCancelBtn">Cancel</button>
+          <button type="button" class="scan-btn" id="setupContinueBtn">
+            I’ve finished — continue
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="sidepanel.js"></script>
   </body>
 </html>

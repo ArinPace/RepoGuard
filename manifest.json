@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
   "name": "RepoGuard",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Scan GitHub repositories for common security vulnerabilities and learn how to fix them.",
   "permissions": ["activeTab", "storage", "scripting", "sidePanel", "downloads"],
   "host_permissions": [
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",
     "https://github.com/*",
-    "http://127.0.0.1:3847/*"
+    "http://127.0.0.1:3847/*",
+    "https://desktop.docker.com/*",
+    "https://docs.docker.com/*",
+    "https://nodejs.org/*"
   ],
   "background": {
     "service_worker": "background.js",

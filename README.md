@@ -20,13 +20,13 @@ Selection is stored in `chrome.storage.local` per owner/repo.
 
 Click **Test production** in the side panel. That clones the public repo, pulls the toolchain Docker image, installs dependencies, and runs the build.
 
-Chrome cannot start Docker by itself. **First time only**, if the local helper isn’t running, RepoGuard copies this setup command (and downloads `Start-RepoGuard-Agent.command`):
+Chrome cannot start Docker by itself. **First time only**, clicking **Test production** opens a **Download requirements** popup with buttons for:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash
-```
+1. **Docker Desktop** (installer download)
+2. **Node.js** (download page)
+3. **RepoGuard helper** (starter script)
 
-That script installs the agent under `~/.repoguard`, starts Docker if needed, and listens on `http://127.0.0.1:3847`. The side panel waits and then continues automatically.
+Or use **Download all**. Install the apps, double-click the helper, and the panel continues when the helper is online.
 
 ### Requirements (once)
 
