@@ -854,12 +854,25 @@ function setAgentPill(state, label) {
 /** @type {((value: boolean) => void) | null} */
 let setupWaitResolve = null;
 
+const SETUP_PROGRESS_KEY = "setupProgress";
+
+/** @type {{
+ *   dockerDownloadedAt?: number,
+ *   dockerDownloadId?: number,
+ *   nodeOpenedAt?: number,
+ *   helperDownloadedAt?: number,
+ *   helperDownloadId?: number,
+ * }} */
+let setupProgress = {};
+
+/** @type {boolean} */
+let agentDockerReady = false;
+
 function getSetupPlatform() {
   const ua = navigator.userAgent || "";
   const platform = navigator.platform || "";
   const isMac = /Mac/i.test(ua) || /Mac/i.test(platform);
   const isWin = /Win/i.test(ua) || /Win/i.test(platform);
-  // Default Mac downloads to Apple Silicon; Intel Macs can re-download from docker.com if needed.
   const archArm = true;
 
   if (isMac) {
@@ -895,9 +908,32 @@ function getSetupPlatform() {
   };
 }
 
+async function loadSetupProgress() {
+  try {
+    const data = await chrome.storage.local.get(SETUP_PROGRESS_KEY);
+    setupProgress =
+      data[SETUP_PROGRESS_KEY] && typeof data[SETUP_PROGRESS_KEY] === "object"
+        ? data[SETUP_PROGRESS_KEY]
+        : {};
+  } catch {
+    setupProgress = {};
+  }
+  syncSetupButtons();
+  renderSetupChecklist();
+}
+
+async function saveSetupProgress(patch) {
+  setupProgress = { ...setupProgress, ...patch };
+  await chrome.storage.local.set({ [SETUP_PROGRESS_KEY]: setupProgress });
+  syncSetupButtons();
+  renderSetupChecklist();
+}
+
 function showSetupModal() {
   const overlay = document.getElementById("setupOverlay");
   if (overlay) overlay.hidden = false;
+  syncSetupButtons();
+  renderSetupChecklist();
 }
 
 function hideSetupModal(cancel = true) {
@@ -911,57 +947,192 @@ function hideSetupModal(cancel = true) {
 }
 
 /**
- * @param {"docker" | "node" | "helper" | "all"} kind
+ * @param {string} key
+ * @param {"todo" | "done" | "busy" | "warn"} state
+ * @param {string} [label]
+ */
+function setChecklistItem(key, state, label) {
+  const item = document.querySelector(`#setupChecklist [data-key="${key}"]`);
+  if (!item) return;
+  item.dataset.state = state;
+  const mark = item.querySelector(".setup-check-mark");
+  if (mark) {
+    mark.textContent =
+      state === "done" ? "✓" : state === "busy" ? "…" : state === "warn" ? "!" : "○";
+  }
+  if (label) {
+    const text = item.querySelector("span:last-child");
+    if (text) text.textContent = label;
+  }
+}
+
+function renderSetupChecklist() {
+  setChecklistItem(
+    "dockerDownloaded",
+    setupProgress.dockerDownloadedAt ? "done" : "todo",
+    setupProgress.dockerDownloadedAt
+      ? "Docker installer downloaded"
+      : "Docker installer not downloaded yet",
+  );
+  setChecklistItem(
+    "nodeOpened",
+    setupProgress.nodeOpenedAt ? "done" : "todo",
+    setupProgress.nodeOpenedAt
+      ? "Node.js download page opened"
+      : "Node.js download page not opened yet",
+  );
+  setChecklistItem(
+    "helperDownloaded",
+    setupProgress.helperDownloadedAt ? "done" : "todo",
+    setupProgress.helperDownloadedAt
+      ? "RepoGuard helper downloaded"
+      : "RepoGuard helper not downloaded yet",
+  );
+
+  if (agentOnline) {
+    setChecklistItem("helperOnline", "done", "Helper running");
+    if (agentDockerReady) {
+      setChecklistItem("dockerReady", "done", "Docker daemon ready");
+    } else {
+      setChecklistItem(
+        "dockerReady",
+        "warn",
+        "Helper is up — open Docker Desktop and wait until it is ready",
+      );
+    }
+  } else {
+    setChecklistItem(
+      "helperOnline",
+      setupProgress.helperDownloadedAt ? "busy" : "todo",
+      setupProgress.helperDownloadedAt
+        ? "Waiting for helper — Right‑click → Open the .command file"
+        : "Helper not running yet",
+    );
+    setChecklistItem("dockerReady", "todo", "Docker daemon not checked yet");
+  }
+
+  const reveal = document.getElementById("setupRevealBtn");
+  if (reveal) {
+    reveal.hidden = !setupProgress.helperDownloadId;
+  }
+}
+
+function syncSetupButtons() {
+  const dockerBtn = document.getElementById("setupDockerBtn");
+  const nodeBtn = document.getElementById("setupNodeBtn");
+  const helperBtn = document.getElementById("setupHelperBtn");
+  if (dockerBtn) {
+    dockerBtn.textContent = setupProgress.dockerDownloadedAt
+      ? "Download again"
+      : "Download";
+  }
+  if (nodeBtn) {
+    nodeBtn.textContent = setupProgress.nodeOpenedAt ? "Open again" : "Download";
+  }
+  if (helperBtn) {
+    helperBtn.textContent = setupProgress.helperDownloadedAt
+      ? "Download again"
+      : "Download";
+  }
+}
+
+/**
+ * @param {"docker" | "node" | "helper" | "missing"} kind
  */
 async function requestSetupDownload(kind) {
   const note = document.getElementById("setupNote");
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "RG_SETUP_DOWNLOAD",
-      kind,
-      platform: getSetupPlatform(),
-    });
-    if (!response?.ok) {
-      throw new Error(response?.error || "Download failed");
+  await loadSetupProgress();
+
+  /** @type {Array<"docker" | "node" | "helper">} */
+  let kinds = [];
+  if (kind === "missing") {
+    if (!setupProgress.dockerDownloadedAt) kinds.push("docker");
+    if (!setupProgress.nodeOpenedAt) kinds.push("node");
+    if (!setupProgress.helperDownloadedAt) kinds.push("helper");
+    if (!kinds.length) {
+      if (note) {
+        note.textContent =
+          "Nothing missing to download. Install Docker + Node if needed, then Right‑click → Open the helper.";
+      }
+      return { ok: true, skipped: true };
     }
-    if (note) {
-      if (kind === "all") {
-        note.textContent =
-          "Downloads started. Install Docker + Node from your Downloads folder / opened tabs, then double-click the RepoGuard helper.";
-      } else if (kind === "docker") {
-        note.textContent =
-          "Docker download started (or install page opened). Install it, then download Node and the helper.";
-      } else if (kind === "node") {
-        note.textContent =
-          "Opened the Node.js download page. Install the LTS build, then download the helper.";
-      } else {
-        note.textContent =
-          "Helper downloaded. After Docker + Node are installed, double-click the helper file in Downloads.";
+  } else {
+    kinds = [kind];
+  }
+
+  try {
+    for (const item of kinds) {
+      // Skip docker re-download unless user explicitly chose "Download again"
+      if (
+        item === "docker" &&
+        kind === "missing" &&
+        setupProgress.dockerDownloadedAt
+      ) {
+        continue;
+      }
+
+      const response = await chrome.runtime.sendMessage({
+        type: "RG_SETUP_DOWNLOAD",
+        kind: item,
+        platform: getSetupPlatform(),
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || `Download failed (${item})`);
+      }
+
+      if (item === "docker") {
+        const id = response.downloads?.find((d) => d.kind === "docker")?.id;
+        await saveSetupProgress({
+          dockerDownloadedAt: Date.now(),
+          ...(id ? { dockerDownloadId: id } : {}),
+        });
+      } else if (item === "node") {
+        await saveSetupProgress({ nodeOpenedAt: Date.now() });
+      } else if (item === "helper") {
+        const id = response.downloads?.find((d) => d.kind === "helper")?.id;
+        await saveSetupProgress({
+          helperDownloadedAt: Date.now(),
+          ...(id ? { helperDownloadId: id } : {}),
+        });
       }
     }
-    return response;
-  } catch (error) {
+
     if (note) {
-      note.textContent = String(error?.message || error);
+      if (kind === "helper" || kinds.includes("helper")) {
+        note.textContent =
+          "Helper ready in Downloads. If Mac blocks it: Right‑click → Open → Open (not Move to Bin).";
+      } else if (kind === "docker") {
+        note.textContent =
+          "Docker installer downloaded. Open the .dmg, install, then start Docker Desktop.";
+      } else if (kind === "node") {
+        note.textContent =
+          "Opened the Node.js page. Install the LTS .pkg, then download/open the helper.";
+      } else {
+        note.textContent =
+          "Missing downloads started. Install them, then Right‑click → Open the helper.";
+      }
     }
+    renderSetupChecklist();
+    return { ok: true };
+  } catch (error) {
+    if (note) note.textContent = String(error?.message || error);
     throw error;
   }
 }
 
 /**
- * Show setup popup and wait until helper is online or user cancels.
+ * Show setup popup and wait until helper is online with Docker ready, or user cancels.
  * @param {{ timeoutMs?: number }} [opts]
  */
 async function ensureAgentReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+  await loadSetupProgress();
   await refreshAgentHealth();
-  if (agentOnline) return true;
+  if (agentOnline && agentDockerReady) return true;
 
-  setBuildStatus("Setup needed — use the download popup…", "busy");
+  setBuildStatus("Setup needed — download only what you still need…", "busy");
   showSetupModal();
-
-  // Auto-start “Download all” so one click from Test production kicks off downloads.
-  requestSetupDownload("all").catch(() => {});
+  // Do NOT auto-download. User clicks buttons explicitly.
 
   const started = Date.now();
   return new Promise((resolve) => {
@@ -970,7 +1141,9 @@ async function ensureAgentReady(opts = {}) {
     const tick = async () => {
       if (!setupWaitResolve) return;
       await refreshAgentHealth();
-      if (agentOnline) {
+      renderSetupChecklist();
+
+      if (agentOnline && agentDockerReady) {
         const done = setupWaitResolve;
         setupWaitResolve = null;
         hideSetupModal(false);
@@ -978,6 +1151,7 @@ async function ensureAgentReady(opts = {}) {
         done(true);
         return;
       }
+
       if (Date.now() - started >= timeoutMs) {
         const done = setupWaitResolve;
         setupWaitResolve = null;
@@ -985,12 +1159,13 @@ async function ensureAgentReady(opts = {}) {
         done(false);
         return;
       }
+
       const left = Math.ceil((timeoutMs - (Date.now() - started)) / 1000);
-      const note = document.getElementById("setupNote");
-      if (note && !note.textContent.includes("Download")) {
-        /* keep download feedback */
+      if (agentOnline && !agentDockerReady) {
+        setBuildStatus(`Helper online — waiting for Docker Desktop… (${left}s)`, "busy");
+      } else {
+        setBuildStatus(`Waiting for helper… (${left}s)`, "busy");
       }
-      setBuildStatus(`Waiting for helper… (${left}s)`, "busy");
       setTimeout(tick, 2000);
     };
 
@@ -1003,7 +1178,8 @@ async function refreshAgentHealth() {
     const response = await chrome.runtime.sendMessage({ type: "RG_AGENT_HEALTH" });
     if (response?.online) {
       agentOnline = true;
-      if (response.docker === false) {
+      agentDockerReady = response.docker !== false;
+      if (!agentDockerReady) {
         setAgentPill("nodocker", "No Docker");
         const hint = document.getElementById("buildHint");
         if (hint) {
@@ -1020,18 +1196,21 @@ async function refreshAgentHealth() {
       }
     } else {
       agentOnline = false;
+      agentDockerReady = false;
       setAgentPill("offline", "Setup needed");
       const hint = document.getElementById("buildHint");
       if (hint) {
         hint.textContent =
-          "Click Test production — a popup lets you download Docker, Node, and the helper.";
+          "Click Test production — a popup tracks setup and only downloads when you ask.";
       }
     }
   } catch {
     agentOnline = false;
+    agentDockerReady = false;
     setAgentPill("offline", "Setup needed");
   }
   syncBuildButton();
+  renderSetupChecklist();
 }
 
 function stopBuildPoll() {
@@ -1370,7 +1549,14 @@ document.addEventListener("DOMContentLoaded", () => {
     requestSetupDownload("helper").catch(() => {});
   });
   document.getElementById("setupAllBtn").addEventListener("click", () => {
-    requestSetupDownload("all").catch(() => {});
+    requestSetupDownload("missing").catch(() => {});
+  });
+  document.getElementById("setupRevealBtn").addEventListener("click", () => {
+    const id = setupProgress.helperDownloadId;
+    if (!id) return;
+    chrome.runtime
+      .sendMessage({ type: "RG_SHOW_DOWNLOAD", downloadId: id })
+      .catch(() => {});
   });
   document.getElementById("setupCloseBtn").addEventListener("click", () => {
     hideSetupModal(true);
@@ -1382,7 +1568,7 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshAgentHealth()
       .then(() => {
         const note = document.getElementById("setupNote");
-        if (agentOnline && setupWaitResolve) {
+        if (agentOnline && agentDockerReady && setupWaitResolve) {
           const done = setupWaitResolve;
           setupWaitResolve = null;
           hideSetupModal(false);
@@ -1390,14 +1576,22 @@ document.addEventListener("DOMContentLoaded", () => {
           done(true);
           return;
         }
+        if (agentOnline && !agentDockerReady) {
+          if (note) {
+            note.textContent =
+              "Helper is running, but Docker isn’t ready yet. Open Docker Desktop and wait for it to start.";
+          }
+          return;
+        }
         if (note) {
           note.textContent =
-            "Helper not detected yet. Finish installing Docker + Node, double-click the downloaded helper, then click Continue again.";
+            "Helper not detected yet. After installs: Finder → Right‑click the helper → Open → Open.";
         }
       })
       .catch(() => {});
   });
 
+  loadSetupProgress().catch(() => {});
   refreshAgentHealth().catch(() => {});
   agentHealthTimer = setInterval(() => {
     refreshAgentHealth().catch(() => {});

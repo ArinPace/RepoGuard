@@ -355,6 +355,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "RG_SHOW_DOWNLOAD") {
+    const id = Number(message.downloadId);
+    if (!Number.isFinite(id)) {
+      sendResponse({ ok: false, error: "Missing downloadId" });
+      return false;
+    }
+    try {
+      chrome.downloads.show(id);
+      sendResponse({ ok: true });
+    } catch (error) {
+      sendResponse({ ok: false, error: String(error?.message || error) });
+    }
+    return false;
+  }
+
   if (message.type === "RG_SETUP_DOWNLOAD") {
     const kind = String(message.kind || "helper");
     const platform =

@@ -93,42 +93,80 @@
     <div class="setup-overlay" id="setupOverlay" hidden>
       <div class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
         <header class="setup-header">
-          <h2 id="setupTitle">Download requirements</h2>
+          <h2 id="setupTitle">Set up Test production</h2>
           <button type="button" class="setup-close" id="setupCloseBtn" aria-label="Close">×</button>
         </header>
         <p class="setup-lead">
-          Test production needs Docker, Node.js, and a small local helper.
-          Click to download each one, install them, then start the helper.
+          Download only what you still need, install it, then start the helper.
+          Nothing downloads until you click a button.
         </p>
+
+        <ul class="setup-checklist" id="setupChecklist">
+          <li data-key="dockerDownloaded" data-state="todo">
+            <span class="setup-check-mark" aria-hidden="true">○</span>
+            <span>Docker installer downloaded</span>
+          </li>
+          <li data-key="nodeOpened" data-state="todo">
+            <span class="setup-check-mark" aria-hidden="true">○</span>
+            <span>Node.js download page opened</span>
+          </li>
+          <li data-key="helperDownloaded" data-state="todo">
+            <span class="setup-check-mark" aria-hidden="true">○</span>
+            <span>RepoGuard helper downloaded</span>
+          </li>
+          <li data-key="helperOnline" data-state="todo">
+            <span class="setup-check-mark" aria-hidden="true">○</span>
+            <span>Helper running</span>
+          </li>
+          <li data-key="dockerReady" data-state="todo">
+            <span class="setup-check-mark" aria-hidden="true">○</span>
+            <span>Docker daemon ready</span>
+          </li>
+        </ul>
+
         <ol class="setup-steps">
           <li>
             <div class="setup-step-text">
               <strong>Docker Desktop</strong>
-              <span>Runs the build in an isolated container</span>
+              <span id="setupDockerHint">Open the .dmg and drag Docker to Applications</span>
             </div>
             <button type="button" class="secondary-btn" id="setupDockerBtn">Download</button>
           </li>
           <li>
             <div class="setup-step-text">
               <strong>Node.js</strong>
-              <span>Runs the RepoGuard helper on your machine</span>
+              <span>Install the LTS macOS .pkg, then quit/reopen Terminal if needed</span>
             </div>
             <button type="button" class="secondary-btn" id="setupNodeBtn">Download</button>
           </li>
           <li>
             <div class="setup-step-text">
               <strong>RepoGuard helper</strong>
-              <span>Double-click the downloaded starter after Docker + Node are installed</span>
+              <span id="setupHelperHint">macOS may block it — use Right‑click → Open → Open</span>
             </div>
-            <button type="button" class="secondary-btn" id="setupHelperBtn">Download</button>
+            <div class="setup-step-btns">
+              <button type="button" class="secondary-btn" id="setupHelperBtn">Download</button>
+              <button type="button" class="secondary-btn" id="setupRevealBtn" hidden>
+                Show in Finder
+              </button>
+            </div>
           </li>
         </ol>
-        <button type="button" class="scan-btn setup-all-btn" id="setupAllBtn">
-          Download all
+
+        <button type="button" class="secondary-btn setup-all-btn" id="setupAllBtn">
+          Download missing only
         </button>
-        <p class="setup-note" id="setupNote">
-          After installs finish, double-click the helper file. This window waits automatically.
+
+        <p class="setup-gatekeeper" id="setupGatekeeper">
+          If Mac says the helper “could not be verified”: Finder → Downloads →
+          <strong>Right‑click</strong> the helper → <strong>Open</strong> → <strong>Open</strong>.
+          Do not click Move to Bin.
         </p>
+
+        <p class="setup-note" id="setupNote">
+          Waiting for the helper… this checklist updates automatically.
+        </p>
+
         <div class="setup-actions">
           <button type="button" class="secondary-btn" id="setupCancelBtn">Cancel</button>
           <button type="button" class="scan-btn" id="setupContinueBtn">
