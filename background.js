@@ -89,6 +89,38 @@ function downloadUrl(url, filename) {
   });
 }
 
+/**
+ * chrome.downloads often fails on chrome-extension:// URLs with a bogus
+ * "Check Internet connection" error. Prefer a data: URL, then GitHub raw.
+ * @param {string} helperPath
+ * @param {string} helperFilename
+ * @returns {Promise<number>}
+ */
+async function downloadHelperFile(helperPath, helperFilename) {
+  const errors = [];
+
+  try {
+    const res = await fetch(chrome.runtime.getURL(helperPath));
+    if (!res.ok) throw new Error(`extension resource HTTP ${res.status}`);
+    const text = await res.text();
+    if (!text || text.length < 20) throw new Error("extension resource empty");
+    const base64 = btoa(unescape(encodeURIComponent(text)));
+    const dataUrl = `data:application/octet-stream;base64,${base64}`;
+    return await downloadUrl(dataUrl, helperFilename);
+  } catch (error) {
+    errors.push(`data:${String(error?.message || error)}`);
+  }
+
+  const rawUrl = `https://raw.githubusercontent.com/ArinPace/RepoGuard/main/${helperPath}`;
+  try {
+    return await downloadUrl(rawUrl, helperFilename);
+  } catch (error) {
+    errors.push(`raw:${String(error?.message || error)}`);
+  }
+
+  throw new Error(`Helper download failed (${errors.join("; ")})`);
+}
+
 // Toolbar icon opens the side panel (no popup).
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -374,7 +406,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         platform.helperFilename || "Start-RepoGuard-Agent.command",
       );
       queue.push(() =>
-        downloadUrl(chrome.runtime.getURL(helperPath), helperName).then((id) => {
+        downloadHelperFile(helperPath, helperName).then((id) => {
           result.downloads.push({ kind: "helper", id, filename: helperName });
         }),
       );
