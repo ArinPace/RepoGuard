@@ -12,6 +12,9 @@ import {
 
 export const LAST_SCAN_KEY = "lastScan";
 
+/** Local Docker build agent (bound to loopback only). */
+export const AGENT_BASE_URL = "http://127.0.0.1:3847";
+
 /** @type {Promise<unknown> | null} */
 let scanInFlight = null;
 
@@ -219,6 +222,95 @@ async function runScan(repoInfo, options = {}) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return;
+
+  if (message.type === "RG_AGENT_HEALTH") {
+    fetch(`${AGENT_BASE_URL}/v1/health`)
+      .then(async (res) => {
+        if (!res.ok) {
+          sendResponse({
+            ok: false,
+            online: false,
+            error: `Agent HTTP ${res.status}`,
+          });
+          return;
+        }
+        const data = await res.json();
+        sendResponse({
+          ok: true,
+          online: true,
+          docker: Boolean(data.docker),
+          version: data.version || null,
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          online: false,
+          error: String(error?.message || error),
+        });
+      });
+    return true;
+  }
+
+  if (message.type === "RG_BUILD_CHECK") {
+    const owner = String(message.owner || "");
+    const repo = String(message.repo || "");
+    const ref = message.ref ? String(message.ref) : undefined;
+    const body = JSON.stringify({ owner, repo, ...(ref ? { ref } : {}) });
+
+    fetch(`${AGENT_BASE_URL}/v1/build`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          sendResponse({
+            ok: false,
+            error: data.error || `Agent HTTP ${res.status}`,
+          });
+          return;
+        }
+        sendResponse({ ok: true, job: data.job });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error:
+            String(error?.message || error) +
+            " — is the RepoGuard agent running on 127.0.0.1:3847?",
+        });
+      });
+    return true;
+  }
+
+  if (message.type === "RG_BUILD_JOB") {
+    const id = String(message.jobId || "");
+    if (!id) {
+      sendResponse({ ok: false, error: "Missing jobId" });
+      return false;
+    }
+    fetch(`${AGENT_BASE_URL}/v1/jobs/${encodeURIComponent(id)}`)
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          sendResponse({
+            ok: false,
+            error: data.error || `Agent HTTP ${res.status}`,
+          });
+          return;
+        }
+        sendResponse({ ok: true, job: data.job });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error?.message || error),
+        });
+      });
+    return true;
+  }
 
   if (message.type === "RG_SCAN") {
     const owner = String(message.owner || "");

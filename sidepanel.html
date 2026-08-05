@@ -45,6 +45,21 @@
         Scan selection
       </button>
 
+      <section class="build-section" id="buildSection" hidden>
+        <div class="section-bar">
+          <h2 class="section-title">Build check</h2>
+          <span class="agent-pill" id="agentPill" data-state="unknown">Agent…</span>
+        </div>
+        <p class="build-hint" id="buildHint">
+          Runs install + build in local Docker via the RepoGuard agent.
+        </p>
+        <button type="button" class="secondary-btn build-btn" id="buildBtn" disabled>
+          Check build
+        </button>
+        <p class="build-status" id="buildStatus" hidden></p>
+        <pre class="build-log" id="buildLog" hidden></pre>
+      </section>
+
       <section class="results" id="results" hidden>
         <div class="results-toolbar">
           <h2 class="section-title">Findings</h2>

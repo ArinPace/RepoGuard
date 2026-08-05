@@ -107,6 +107,28 @@ export function parseGitHubRepoUrl(urlString) {
   };
 }
 
+/**
+ * If pathname includes /tree/REF or /blob/REF, return REF; else null.
+ * @param {string | undefined} pathname
+ */
+export function refFromRepoPathname(pathname) {
+  if (!pathname || typeof pathname !== "string") return null;
+  const parts = pathname.split("/").filter(Boolean);
+  // owner, repo, tree|blob, ref, ...
+  if (parts.length < 4) return null;
+  const kind = parts[2];
+  if (kind !== "tree" && kind !== "blob") return null;
+  const ref = parts[3];
+  if (!ref || ref.includes("..")) return null;
+  // Reject obviously encoded path junk; allow common branch chars.
+  if (!/^[A-Za-z0-9._/~+-]+$/.test(ref)) return null;
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+}
+
 export function formatRepoLabel(repoInfo) {
   return `${repoInfo.owner}/${repoInfo.repo}`;
 }

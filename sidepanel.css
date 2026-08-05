@@ -203,6 +203,84 @@ h1 {
   color: #8b949e;
 }
 
+.build-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #21262d;
+}
+
+.agent-pill {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  background: #161b22;
+}
+
+.agent-pill[data-state="online"] {
+  color: #3fb950;
+  border-color: #238636;
+}
+
+.agent-pill[data-state="offline"],
+.agent-pill[data-state="nodocker"] {
+  color: #f85149;
+  border-color: #da3633;
+}
+
+.build-hint {
+  margin: 8px 0 10px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: #8b949e;
+}
+
+.build-btn {
+  width: 100%;
+}
+
+.build-status {
+  margin-top: 10px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #c9d1d9;
+}
+
+.build-status[data-kind="ok"] {
+  color: #3fb950;
+}
+
+.build-status[data-kind="fail"] {
+  color: #f85149;
+}
+
+.build-status[data-kind="warn"] {
+  color: #d29922;
+}
+
+.build-status[data-kind="busy"] {
+  color: #58a6ff;
+}
+
+.build-log {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #21262d;
+  background: #010409;
+  color: #8b949e;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .results-toolbar {
   display: flex;
   align-items: center;
@@ -247,12 +325,6 @@ h1 {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid #21262d;
-}
-
-.results-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 10px;
 }
 
 .severity-groups {

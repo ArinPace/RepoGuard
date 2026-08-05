@@ -1,0 +1,14 @@
+{
+  "name": "repoguard-agent",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Local Docker agent for RepoGuard build checks",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

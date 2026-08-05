@@ -1,24 +1,55 @@
 # RepoGuard
 
-Chrome extension that scans public GitHub repositories with **local heuristic rules** (regex patterns) and explains why each match matters and how to fix it.
+Chrome extension that scans public GitHub repositories with **local heuristic rules** (regex patterns) and explains why each match matters and how to fix it. Optionally verifies whether a repo **installs and builds** via a local Docker agent.
 
 ## Current status
 
-**Side panel UI.** Click the RepoGuard toolbar icon to open a docked side panel. Select files/folders from the list (read from the active GitHub tab), scan, and review findings — all in one place. The panel is enabled only on `github.com` tabs and auto-hides when you switch away or leave GitHub.
+**Side panel UI.** Click the RepoGuard toolbar icon to open a docked side panel. Select files/folders, run a heuristic scan, and optionally **Check build** (local Docker). The panel is enabled only on `github.com` tabs and auto-hides when you switch away or leave GitHub.
 
 ## How to use
 
 1. Open a repo code page (`github.com/owner/repo` or `.../tree/branch/...`)
 2. Click the **RepoGuard** icon in the Chrome toolbar → the **side panel** opens
-3. Tick files/folders in **Select paths** (use **Refresh** if the list is empty after navigation)
-4. Click **Scan selection**
-5. Review findings in the panel; use **Export findings** to copy results
+3. Tick files/folders in **Select paths** (use **Refresh** / **Select all** as needed)
+4. Click **Scan selection** for heuristic findings
+5. (Optional) Start the local agent, then click **Check build**
 
 Selection is stored in `chrome.storage.local` per owner/repo.
 
+## Local build check (Docker agent)
+
+The extension cannot run Docker itself. A small **localhost agent** clones the public repo and runs install + build inside an ephemeral container.
+
+### Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (daemon running)
+- Node.js 18+
+- `git` on your PATH
+
+### Start the agent
+
+```bash
+cd agent
+npm start
+```
+
+Listens on `http://127.0.0.1:3847` only.
+
+- `GET /v1/health` — agent + Docker status  
+- `POST /v1/build` — `{ "owner", "repo", "ref?" }` → job  
+- `GET /v1/jobs/:id` — poll status / logs / result  
+
+Supported stacks (first match): Node (`package.json`), Rust (`Cargo.toml`), Go (`go.mod`), Python (`pyproject.toml` / `requirements.txt`), Make (`Makefile` with `build`). Unknown stacks return a clear unsupported result (not a crash).
+
+Jobs time out after **10 minutes**. Log tails are capped (~256KB). Expect **~1–3 minutes** for a typical warm Node/Go repo; first image pull is slower.
+
+### In the side panel
+
+The **Build check** section shows **Agent online / offline**. If offline, start the agent as above, then reload the extension if Chrome has not granted `http://127.0.0.1:3847` yet.
+
 ## Reload after this change
 
-On `chrome://extensions`, click **Reload** on RepoGuard (accept `sidePanel` if prompted). Refresh any open GitHub tabs so the content script updates.
+On `chrome://extensions`, click **Reload** on RepoGuard (accept host access for `127.0.0.1:3847` if prompted). Refresh any open GitHub tabs so the content script updates.
 
 ### Permissions
 
@@ -27,16 +58,18 @@ On `chrome://extensions`, click **Reload** on RepoGuard (accept `sidePanel` if p
 - `sidePanel` — docked extension UI  
 - `api.github.com` / `raw.githubusercontent.com` — fetch trees and file contents  
 - `github.com` — content script path discovery  
+- `http://127.0.0.1:3847` — local build agent  
 
 ## Rate limits
 
-Unauthenticated GitHub API access is roughly **60 requests/hour**. Each scan uses a few API calls plus raw file downloads. Public repos only in this version.
+Unauthenticated GitHub API access is roughly **60 requests/hour**. Each scan uses a few API calls plus raw file downloads. Public repos only in this version. Build checks clone via `git` (separate from the API quota).
 
 ## Load locally (unpacked)
 
 1. Open Chrome → `chrome://extensions`
 2. Developer mode → **Load unpacked** → this folder
-3. Open a GitHub repo → click RepoGuard → select paths → **Scan selection**
+3. (Optional) `cd agent && npm start`
+4. Open a GitHub repo → click RepoGuard → select paths → **Scan selection** / **Check build**
 
 ## Pack a zip
 
@@ -45,14 +78,17 @@ cd /Users/arainajain/Desktop/RepoGuard
 zip -r ../RepoGuard.zip manifest.json sidepanel.html sidepanel.css sidepanel.js background.js github.js githubApi.js languages.js findings.js rules.js scanner.js selection.js content.js icons
 ```
 
+(The `agent/` folder is run separately; include it in releases if you ship the build-check feature.)
+
 ## Project layout
 
 ```
 RepoGuard/
   manifest.json
-  sidepanel.html/css/js   # Docked UI (select + scan + findings)
-  background.js           # Side panel behavior + RG_SCAN worker
+  sidepanel.html/css/js   # Docked UI (select + scan + build + findings)
+  background.js           # Side panel behavior, RG_SCAN, agent proxy
   content.js              # Path discovery on GitHub pages
+  agent/                  # Local Docker build agent (localhost:3847)
   selection.js
   github.js / githubApi.js
   languages.js / rules.js / scanner.js / findings.js
@@ -60,6 +96,6 @@ RepoGuard/
   tests/
 ```
 
-### Languages scanned
+### Languages scanned (heuristics)
 
 See [`languages.js`](languages.js) for the extension list (JS/TS, Python, JVM, Go, Rust, C/C++, shells, configs, templates, …).

@@ -1,4 +1,4 @@
-import { parseGitHubRepoUrl, formatRepoLabel } from "./github.js";
+import { parseGitHubRepoUrl, formatRepoLabel, refFromRepoPathname } from "./github.js";
 import { ensureGitHubAccess, scannableExtensionList } from "./githubApi.js";
 import {
   locationToGitHubUrl,
@@ -46,6 +46,13 @@ let selectionPersistChain = Promise.resolve();
 
 /** @type {"repo" | "results" | "other"} */
 let uiKind = "other";
+
+/** @type {ReturnType<typeof setInterval> | null} */
+let agentHealthTimer = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let buildPollTimer = null;
+let buildBusy = false;
+let agentOnline = false;
 
 const SEVERITY_LABELS = {
   severe: "Severe",
@@ -132,7 +139,13 @@ function renderState({ kind, title, detail }) {
     selectSection.hidden = !(kind === "repo" || kind === "results");
   }
 
+  const buildSection = document.getElementById("buildSection");
+  if (buildSection) {
+    buildSection.hidden = !(kind === "repo" || kind === "results");
+  }
+
   setScanEnabled(kind === "repo" || kind === "results");
+  syncBuildButton();
 }
 
 function parkNotes() {
@@ -816,13 +829,195 @@ async function handleClearSelection() {
   document.getElementById("detail").textContent = selectionDetailLine();
 }
 
+function syncBuildButton() {
+  const btn = document.getElementById("buildBtn");
+  if (!btn) return;
+  const allow =
+    !buildBusy && agentOnline && Boolean(currentRepo) && (uiKind === "repo" || uiKind === "results");
+  btn.disabled = !allow;
+  if (!buildBusy) {
+    btn.textContent = "Check build";
+  }
+}
+
+/**
+ * @param {"unknown" | "online" | "offline" | "nodocker"} state
+ * @param {string} label
+ */
+function setAgentPill(state, label) {
+  const pill = document.getElementById("agentPill");
+  if (!pill) return;
+  pill.dataset.state = state;
+  pill.textContent = label;
+}
+
+async function refreshAgentHealth() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RG_AGENT_HEALTH" });
+    if (response?.online) {
+      agentOnline = true;
+      if (response.docker === false) {
+        setAgentPill("nodocker", "Agent · no Docker");
+        const hint = document.getElementById("buildHint");
+        if (hint) {
+          hint.textContent =
+            "Agent is up but Docker is not available. Start Docker Desktop, then retry.";
+        }
+      } else {
+        setAgentPill("online", "Agent online");
+        const hint = document.getElementById("buildHint");
+        if (hint) {
+          hint.textContent =
+            "Runs install + build in local Docker via the RepoGuard agent.";
+        }
+      }
+    } else {
+      agentOnline = false;
+      setAgentPill("offline", "Agent offline");
+      const hint = document.getElementById("buildHint");
+      if (hint) {
+        hint.textContent =
+          "Start the agent: cd agent && npm start (Docker required). Listens on 127.0.0.1:3847.";
+      }
+    }
+  } catch {
+    agentOnline = false;
+    setAgentPill("offline", "Agent offline");
+  }
+  syncBuildButton();
+}
+
+function stopBuildPoll() {
+  if (buildPollTimer) {
+    clearInterval(buildPollTimer);
+    buildPollTimer = null;
+  }
+}
+
+/**
+ * @param {object} job
+ */
+function renderBuildJob(job) {
+  const statusEl = document.getElementById("buildStatus");
+  const logEl = document.getElementById("buildLog");
+  if (!statusEl || !logEl) return;
+
+  statusEl.hidden = false;
+  logEl.hidden = false;
+
+  if (job.status === "done" || job.status === "error") {
+    const result = job.result || {};
+    if (result.unsupported) {
+      statusEl.dataset.kind = "warn";
+      statusEl.textContent = result.error || "Unsupported stack";
+    } else if (result.ok) {
+      statusEl.dataset.kind = "ok";
+      const secs = result.durationMs
+        ? ` in ${(result.durationMs / 1000).toFixed(1)}s`
+        : "";
+      statusEl.textContent = `Build passed (${result.stack || "unknown"})${secs}`;
+    } else {
+      statusEl.dataset.kind = "fail";
+      statusEl.textContent =
+        result.error || job.error || `Build failed (exit ${result.exitCode})`;
+    }
+  } else {
+    statusEl.dataset.kind = "busy";
+    statusEl.textContent = `Build ${job.phase || job.status}…`;
+  }
+
+  const logText = job.result?.logTail || job.log || "";
+  logEl.textContent = logText || "(no log yet)";
+}
+
+async function handleBuildCheck() {
+  if (!currentRepo || buildBusy) return;
+  buildBusy = true;
+  stopBuildPoll();
+  syncBuildButton();
+  const btn = document.getElementById("buildBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Building…";
+  }
+
+  const statusEl = document.getElementById("buildStatus");
+  const logEl = document.getElementById("buildLog");
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "busy";
+    statusEl.textContent = "Starting build check…";
+  }
+  if (logEl) {
+    logEl.hidden = false;
+    logEl.textContent = "";
+  }
+
+  const ref = refFromRepoPathname(currentRepo.pathname) || undefined;
+
+  try {
+    const started = await chrome.runtime.sendMessage({
+      type: "RG_BUILD_CHECK",
+      owner: currentRepo.owner,
+      repo: currentRepo.repo,
+      ref,
+    });
+    if (!started?.ok || !started.job?.id) {
+      throw new Error(started?.error || "Failed to start build job");
+    }
+
+    const jobId = started.job.id;
+    renderBuildJob(started.job);
+
+    await new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const response = await chrome.runtime.sendMessage({
+            type: "RG_BUILD_JOB",
+            jobId,
+          });
+          if (!response?.ok || !response.job) {
+            throw new Error(response?.error || "Lost build job");
+          }
+          renderBuildJob(response.job);
+          if (response.job.status === "done" || response.job.status === "error") {
+            stopBuildPoll();
+            resolve(response.job);
+          }
+        } catch (error) {
+          stopBuildPoll();
+          reject(error);
+        }
+      };
+
+      buildPollTimer = setInterval(poll, 2000);
+      poll();
+    });
+  } catch (error) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "fail";
+      statusEl.textContent = String(error?.message || error);
+    }
+  } finally {
+    buildBusy = false;
+    stopBuildPoll();
+    syncBuildButton();
+  }
+}
+
 async function detectActivePage() {
   clearResults();
   currentRepo = null;
   currentSelection = { files: [], folders: [] };
   listedEntries = [];
   setScanEnabled(false);
+  stopBuildPoll();
+  buildBusy = false;
   document.getElementById("selectSection").hidden = true;
+  const buildSection = document.getElementById("buildSection");
+  if (buildSection) buildSection.hidden = true;
+  syncBuildButton();
   renderSelectList();
 
   const tab = await getActiveTab();
@@ -977,6 +1172,25 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
+
+  document.getElementById("buildBtn").addEventListener("click", () => {
+    handleBuildCheck().catch((error) => {
+      const statusEl = document.getElementById("buildStatus");
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.dataset.kind = "fail";
+        statusEl.textContent = String(error?.message || error);
+      }
+      buildBusy = false;
+      stopBuildPoll();
+      syncBuildButton();
+    });
+  });
+
+  refreshAgentHealth().catch(() => {});
+  agentHealthTimer = setInterval(() => {
+    refreshAgentHealth().catch(() => {});
+  }, 5000);
 
   detectActivePage().catch((error) => {
     renderState({
