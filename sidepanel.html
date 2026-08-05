@@ -102,13 +102,13 @@
         </p>
 
         <ul class="setup-checklist" id="setupChecklist">
-          <li data-key="dockerDownloaded" data-state="todo">
+          <li data-key="dockerAvailable" data-state="todo">
             <span class="setup-check-mark" aria-hidden="true">○</span>
-            <span>Docker installer downloaded</span>
+            <span>Docker Desktop available</span>
           </li>
-          <li data-key="nodeOpened" data-state="todo">
+          <li data-key="nodeAvailable" data-state="todo">
             <span class="setup-check-mark" aria-hidden="true">○</span>
-            <span>Node.js download page opened</span>
+            <span>Node.js available</span>
           </li>
           <li data-key="helperDownloaded" data-state="todo">
             <span class="setup-check-mark" aria-hidden="true">○</span>
@@ -123,6 +123,15 @@
             <span>Docker daemon ready</span>
           </li>
         </ul>
+
+        <div class="setup-have-row">
+          <button type="button" class="secondary-btn" id="setupHaveDockerBtn">
+            I already have Docker
+          </button>
+          <button type="button" class="secondary-btn" id="setupHaveNodeBtn">
+            I already have Node
+          </button>
+        </div>
 
         <button type="button" class="scan-btn setup-all-btn" id="setupStartHelperBtn">
           Start helper

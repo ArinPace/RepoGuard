@@ -416,6 +416,18 @@ h1 {
   line-height: 1.45;
 }
 
+.setup-have-row {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.setup-have-row .secondary-btn {
+  flex: 1;
+  font-size: 0.72rem;
+  padding: 8px 6px;
+}
+
 .setup-advanced {
   margin-top: 12px;
   border-radius: 8px;

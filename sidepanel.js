@@ -859,7 +859,9 @@ const SETUP_PROGRESS_KEY = "setupProgress";
 /** @type {{
  *   dockerDownloadedAt?: number,
  *   dockerDownloadId?: number,
+ *   dockerHaveItAt?: number,
  *   nodeOpenedAt?: number,
+ *   nodeHaveItAt?: number,
  *   helperDownloadedAt?: number,
  *   helperDownloadId?: number,
  * }} */
@@ -867,6 +869,18 @@ let setupProgress = {};
 
 /** @type {boolean} */
 let agentDockerReady = false;
+
+function dockerIsAvailable() {
+  return Boolean(
+    setupProgress.dockerHaveItAt ||
+      setupProgress.dockerDownloadedAt ||
+      agentDockerReady,
+  );
+}
+
+function nodeIsAvailable() {
+  return Boolean(setupProgress.nodeHaveItAt || setupProgress.nodeOpenedAt);
+}
 
 function getSetupPlatform() {
   const ua = navigator.userAgent || "";
@@ -967,26 +981,38 @@ function setChecklistItem(key, state, label) {
 }
 
 function renderSetupChecklist() {
-  setChecklistItem(
-    "dockerDownloaded",
-    setupProgress.dockerDownloadedAt ? "done" : "todo",
-    setupProgress.dockerDownloadedAt
-      ? "Docker installer downloaded"
-      : "Docker installer not downloaded yet",
-  );
-  setChecklistItem(
-    "nodeOpened",
-    setupProgress.nodeOpenedAt ? "done" : "todo",
-    setupProgress.nodeOpenedAt
-      ? "Node.js download page opened"
-      : "Node.js download page not opened yet",
-  );
+  if (dockerIsAvailable()) {
+    setChecklistItem(
+      "dockerAvailable",
+      "done",
+      agentDockerReady
+        ? "Docker Desktop available (daemon confirmed)"
+        : "Docker Desktop available",
+    );
+  } else {
+    setChecklistItem(
+      "dockerAvailable",
+      "todo",
+      "Docker Desktop — click “I already have Docker” if it’s installed",
+    );
+  }
+
+  if (nodeIsAvailable()) {
+    setChecklistItem("nodeAvailable", "done", "Node.js available");
+  } else {
+    setChecklistItem(
+      "nodeAvailable",
+      "todo",
+      "Node.js — click “I already have Node” if it’s installed",
+    );
+  }
+
   setChecklistItem(
     "helperDownloaded",
     setupProgress.helperDownloadedAt ? "done" : "todo",
     setupProgress.helperDownloadedAt
-      ? "RepoGuard helper downloaded"
-      : "RepoGuard helper not downloaded yet",
+      ? "RepoGuard helper ready"
+      : "RepoGuard helper not started yet",
   );
 
   if (agentOnline) {
@@ -997,7 +1023,7 @@ function renderSetupChecklist() {
       setChecklistItem(
         "dockerReady",
         "warn",
-        "Helper is up — open Docker Desktop and wait until it is ready",
+        "Helper is up — open Docker Desktop and wait until the engine is running",
       );
     }
   } else {
@@ -1006,14 +1032,37 @@ function renderSetupChecklist() {
       setupProgress.helperDownloadedAt ? "busy" : "todo",
       setupProgress.helperDownloadedAt
         ? "Waiting for helper — use Start helper, then Open Anyway if Mac asks"
-        : "Helper not running yet",
+        : "Helper not running yet — click Start helper",
     );
-    setChecklistItem("dockerReady", "todo", "Docker daemon not checked yet");
+    setChecklistItem(
+      "dockerReady",
+      dockerIsAvailable() ? "busy" : "todo",
+      dockerIsAvailable()
+        ? "Docker daemon will be confirmed once the helper is running"
+        : "Docker daemon checks after the helper starts",
+    );
   }
 
   const reveal = document.getElementById("setupRevealBtn");
   if (reveal) {
     reveal.hidden = !setupProgress.helperDownloadId;
+  }
+
+  const haveDockerBtn = document.getElementById("setupHaveDockerBtn");
+  const haveNodeBtn = document.getElementById("setupHaveNodeBtn");
+  if (haveDockerBtn) {
+    haveDockerBtn.textContent = dockerIsAvailable()
+      ? "Docker marked ✓"
+      : "I already have Docker";
+    haveDockerBtn.disabled = dockerIsAvailable() && !agentDockerReady
+      ? false
+      : dockerIsAvailable();
+  }
+  if (haveNodeBtn) {
+    haveNodeBtn.textContent = nodeIsAvailable()
+      ? "Node marked ✓"
+      : "I already have Node";
+    haveNodeBtn.disabled = nodeIsAvailable();
   }
 }
 
@@ -1096,13 +1145,13 @@ async function requestSetupDownload(kind) {
   /** @type {Array<"docker" | "node" | "helper">} */
   let kinds = [];
   if (kind === "missing") {
-    if (!setupProgress.dockerDownloadedAt) kinds.push("docker");
-    if (!setupProgress.nodeOpenedAt) kinds.push("node");
+    if (!dockerIsAvailable()) kinds.push("docker");
+    if (!nodeIsAvailable()) kinds.push("node");
     if (!setupProgress.helperDownloadedAt) kinds.push("helper");
     if (!kinds.length) {
       if (note) {
         note.textContent =
-          "Nothing missing to download. Install Docker + Node if needed, then Right‑click → Open the helper.";
+          "Nothing missing. Click Start helper (Open Anyway in Privacy settings if Mac asks).";
       }
       return { ok: true, skipped: true };
     }
@@ -1242,6 +1291,10 @@ async function refreshAgentHealth() {
         if (hint) {
           hint.textContent =
             "One click clones the repo, downloads the toolchain image, installs deps, and builds in Docker.";
+        }
+        // Helper confirmed Docker — remember so the checklist stays honest.
+        if (!setupProgress.dockerHaveItAt && !setupProgress.dockerDownloadedAt) {
+          saveSetupProgress({ dockerHaveItAt: Date.now() }).catch(() => {});
         }
       }
     } else {
