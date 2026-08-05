@@ -47,16 +47,17 @@
 
       <section class="build-section" id="buildSection" hidden>
         <div class="section-bar">
-          <h2 class="section-title">Build check</h2>
-          <span class="agent-pill" id="agentPill" data-state="unknown">Agent…</span>
+          <h2 class="section-title">Production</h2>
+          <span class="agent-pill" id="agentPill" data-state="unknown">…</span>
         </div>
         <p class="build-hint" id="buildHint">
-          Runs install + build in local Docker via the RepoGuard agent.
+          One click clones the repo, downloads the toolchain image, installs deps, and builds in Docker.
         </p>
-        <button type="button" class="secondary-btn build-btn" id="buildBtn" disabled>
-          Check build
+        <button type="button" class="scan-btn build-btn" id="buildBtn" disabled>
+          Test production
         </button>
         <p class="build-status" id="buildStatus" hidden></p>
+        <pre class="build-setup" id="buildSetup" hidden></pre>
         <pre class="build-log" id="buildLog" hidden></pre>
       </section>
 

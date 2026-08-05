@@ -252,6 +252,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "RG_DOWNLOAD_BOOTSTRAP") {
+    const url = chrome.runtime.getURL(
+      "bootstrap/Start-RepoGuard-Agent.command",
+    );
+    chrome.downloads.download(
+      {
+        url,
+        filename: "Start-RepoGuard-Agent.command",
+        saveAs: false,
+      },
+      (downloadId) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({
+            ok: false,
+            error: chrome.runtime.lastError.message,
+          });
+          return;
+        }
+        sendResponse({
+          ok: true,
+          downloadId,
+          installCommand:
+            "curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash",
+        });
+      },
+    );
+    return true;
+  }
+
   if (message.type === "RG_BUILD_CHECK") {
     const owner = String(message.owner || "");
     const repo = String(message.repo || "");

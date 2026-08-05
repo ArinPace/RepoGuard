@@ -78,6 +78,21 @@ function runDocker(args, opts = {}) {
   });
 }
 
+export async function pullImage(image, opts = {}) {
+  opts.onOutput?.(`[agent] Pulling Docker image ${image} (downloads if needed)…\n`);
+  const result = await runDocker(["pull", image], {
+    timeoutMs: opts.timeoutMs ?? 5 * 60 * 1000,
+    onOutput: opts.onOutput,
+  });
+  if (result.code !== 0) {
+    const detail = `${result.stderr || result.stdout || ""}`.trim();
+    throw new Error(
+      `Failed to pull image ${image}${detail ? `: ${detail.slice(0, 400)}` : ""}`,
+    );
+  }
+  opts.onOutput?.(`[agent] Image ready: ${image}\n`);
+}
+
 /**
  * Run install+build inside an ephemeral Docker container.
  * @param {{
@@ -91,6 +106,24 @@ function runDocker(args, opts = {}) {
  */
 export async function runBuildInDocker(opts) {
   const timeoutMs = opts.timeoutMs ?? JOB_TIMEOUT_MS;
+  const pullBudget = Math.min(5 * 60 * 1000, Math.floor(timeoutMs * 0.4));
+  const buildBudget = Math.max(30_000, timeoutMs - pullBudget);
+
+  try {
+    await pullImage(opts.image, {
+      timeoutMs: pullBudget,
+      onOutput: opts.onOutput,
+    });
+  } catch (error) {
+    const message = String(error?.message || error);
+    return {
+      exitCode: 1,
+      log: tailBytes(message),
+      timedOut: /timed out/i.test(message),
+      error: message,
+    };
+  }
+
   const args = [
     "run",
     "--rm",
@@ -113,7 +146,7 @@ export async function runBuildInDocker(opts) {
 
   try {
     const result = await runDocker(args, {
-      timeoutMs,
+      timeoutMs: buildBudget,
       onOutput: opts.onOutput,
     });
     const combined = `${result.stdout}${result.stderr}`;
@@ -123,7 +156,6 @@ export async function runBuildInDocker(opts) {
       timedOut: false,
     };
   } catch (error) {
-    // Best-effort kill if timeout left a named container.
     await runDocker(["rm", "-f", opts.containerName], { timeoutMs: 10_000 }).catch(
       () => {},
     );

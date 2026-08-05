@@ -155,7 +155,11 @@ async function runJob(job) {
     );
 
     job.status = "building";
-    job.phase = "building";
+    job.phase = "downloading";
+    appendLog(
+      job,
+      "[agent] Downloading toolchain image (if needed), then install + build…\n",
+    );
     const containerName = `repoguard-build-${job.id.slice(0, 8)}`;
     const build = await runBuildInDocker({
       workDir,
@@ -163,8 +167,14 @@ async function runJob(job) {
       command: plan.command,
       containerName,
       timeoutMs: remaining(),
-      onOutput: (chunk) => appendLog(job, chunk),
+      onOutput: (chunk) => {
+        if (job.phase === "downloading" && /Image ready:/.test(chunk)) {
+          job.phase = "building";
+        }
+        appendLog(job, chunk);
+      },
     });
+    job.phase = "building";
 
     job.finishedAt = Date.now();
     const durationMs = job.finishedAt - job.startedAt;

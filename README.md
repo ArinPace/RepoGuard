@@ -18,22 +18,28 @@ Selection is stored in `chrome.storage.local` per owner/repo.
 
 ## Local build check (Docker agent)
 
-The extension cannot run Docker itself. A small **localhost agent** clones the public repo and runs install + build inside an ephemeral container.
+Click **Test production** in the side panel. That clones the public repo, pulls the toolchain Docker image, installs dependencies, and runs the build.
 
-### Requirements
+Chrome cannot start Docker by itself. **First time only**, if the local helper isn’t running, RepoGuard copies this setup command (and downloads `Start-RepoGuard-Agent.command`):
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (daemon running)
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash
+```
+
+That script installs the agent under `~/.repoguard`, starts Docker if needed, and listens on `http://127.0.0.1:3847`. The side panel waits and then continues automatically.
+
+### Requirements (once)
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - Node.js 18+
-- `git` on your PATH
+- `git`
 
-### Start the agent
+### Manual agent start (optional)
 
 ```bash
 cd agent
 npm start
 ```
-
-Listens on `http://127.0.0.1:3847` only.
 
 - `GET /v1/health` — agent + Docker status  
 - `POST /v1/build` — `{ "owner", "repo", "ref?" }` → job  
@@ -42,10 +48,6 @@ Listens on `http://127.0.0.1:3847` only.
 Supported stacks (first match): Node (`package.json`), Rust (`Cargo.toml`), Go (`go.mod`), Python (`pyproject.toml` / `requirements.txt`), Make (`Makefile` with `build`). Unknown stacks return a clear unsupported result (not a crash).
 
 Jobs time out after **10 minutes**. Log tails are capped (~256KB). Expect **~1–3 minutes** for a typical warm Node/Go repo; first image pull is slower.
-
-### In the side panel
-
-The **Build check** section shows **Agent online / offline**. If offline, start the agent as above, then reload the extension if Chrome has not granted `http://127.0.0.1:3847` yet.
 
 ## Reload after this change
 
@@ -75,7 +77,7 @@ Unauthenticated GitHub API access is roughly **60 requests/hour**. Each scan use
 
 ```bash
 cd /Users/arainajain/Desktop/RepoGuard
-zip -r ../RepoGuard.zip manifest.json sidepanel.html sidepanel.css sidepanel.js background.js github.js githubApi.js languages.js findings.js rules.js scanner.js selection.js content.js icons
+zip -r ../RepoGuard.zip manifest.json sidepanel.html sidepanel.css sidepanel.js background.js github.js githubApi.js languages.js findings.js rules.js scanner.js selection.js content.js icons bootstrap
 ```
 
 (The `agent/` folder is run separately; include it in releases if you ship the build-check feature.)

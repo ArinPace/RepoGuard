@@ -833,10 +833,10 @@ function syncBuildButton() {
   const btn = document.getElementById("buildBtn");
   if (!btn) return;
   const allow =
-    !buildBusy && agentOnline && Boolean(currentRepo) && (uiKind === "repo" || uiKind === "results");
+    !buildBusy && Boolean(currentRepo) && (uiKind === "repo" || uiKind === "results");
   btn.disabled = !allow;
   if (!buildBusy) {
-    btn.textContent = "Check build";
+    btn.textContent = "Test production";
   }
 }
 
@@ -851,38 +851,41 @@ function setAgentPill(state, label) {
   pill.textContent = label;
 }
 
+const INSTALL_ONE_LINER =
+  "curl -fsSL https://raw.githubusercontent.com/ArinPace/RepoGuard/main/bootstrap/install.sh | bash";
+
 async function refreshAgentHealth() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "RG_AGENT_HEALTH" });
     if (response?.online) {
       agentOnline = true;
       if (response.docker === false) {
-        setAgentPill("nodocker", "Agent · no Docker");
+        setAgentPill("nodocker", "No Docker");
         const hint = document.getElementById("buildHint");
         if (hint) {
           hint.textContent =
-            "Agent is up but Docker is not available. Start Docker Desktop, then retry.";
+            "Helper is up but Docker isn’t. Open Docker Desktop, then click Test production.";
         }
       } else {
-        setAgentPill("online", "Agent online");
+        setAgentPill("online", "Ready");
         const hint = document.getElementById("buildHint");
         if (hint) {
           hint.textContent =
-            "Runs install + build in local Docker via the RepoGuard agent.";
+            "One click clones the repo, downloads the toolchain image, installs deps, and builds in Docker.";
         }
       }
     } else {
       agentOnline = false;
-      setAgentPill("offline", "Agent offline");
+      setAgentPill("offline", "Setup needed");
       const hint = document.getElementById("buildHint");
       if (hint) {
         hint.textContent =
-          "Start the agent: cd agent && npm start (Docker required). Listens on 127.0.0.1:3847.";
+          "Click Test production — first time it will download a starter (Docker + Node required once).";
       }
     }
   } catch {
     agentOnline = false;
-    setAgentPill("offline", "Agent offline");
+    setAgentPill("offline", "Setup needed");
   }
   syncBuildButton();
 }
@@ -892,6 +895,76 @@ function stopBuildPoll() {
     clearInterval(buildPollTimer);
     buildPollTimer = null;
   }
+}
+
+/**
+ * @param {string} text
+ * @param {"ok" | "fail" | "warn" | "busy"} kind
+ */
+function setBuildStatus(text, kind) {
+  const statusEl = document.getElementById("buildStatus");
+  if (!statusEl) return;
+  statusEl.hidden = false;
+  statusEl.dataset.kind = kind;
+  statusEl.textContent = text;
+}
+
+/**
+ * @param {string | null} text
+ */
+function setBuildSetup(text) {
+  const el = document.getElementById("buildSetup");
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+}
+
+/**
+ * Wait until local agent answers health, optionally prompting bootstrap.
+ * @param {{ timeoutMs?: number }} [opts]
+ */
+async function ensureAgentReady(opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+  await refreshAgentHealth();
+  if (agentOnline) return true;
+
+  setBuildStatus("First-time setup: downloading starter…", "busy");
+  const boot = await chrome.runtime.sendMessage({ type: "RG_DOWNLOAD_BOOTSTRAP" });
+  const cmd = boot?.installCommand || INSTALL_ONE_LINER;
+  setBuildSetup(
+    "Chrome can’t start Docker by itself. Run this once in Terminal, then wait — this panel continues automatically:\n\n" +
+      cmd +
+      "\n\n(Also downloaded Start-RepoGuard-Agent.command — double-click after chmod +x if you prefer.)",
+  );
+
+  try {
+    await navigator.clipboard.writeText(cmd);
+    setBuildStatus(
+      "Setup command copied. Paste in Terminal, then wait here…",
+      "busy",
+    );
+  } catch {
+    setBuildStatus("Run the setup command in Terminal, then wait here…", "busy");
+  }
+
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 2000));
+    await refreshAgentHealth();
+    if (agentOnline) {
+      setBuildSetup(null);
+      setBuildStatus("Helper ready — starting production test…", "busy");
+      return true;
+    }
+    const left = Math.max(0, Math.ceil((timeoutMs - (Date.now() - started)) / 1000));
+    setBuildStatus(`Waiting for helper… (${left}s)`, "busy");
+  }
+  return false;
 }
 
 /**
@@ -915,7 +988,7 @@ function renderBuildJob(job) {
       const secs = result.durationMs
         ? ` in ${(result.durationMs / 1000).toFixed(1)}s`
         : "";
-      statusEl.textContent = `Build passed (${result.stack || "unknown"})${secs}`;
+      statusEl.textContent = `Production build passed (${result.stack || "unknown"})${secs}`;
     } else {
       statusEl.dataset.kind = "fail";
       statusEl.textContent =
@@ -923,11 +996,46 @@ function renderBuildJob(job) {
     }
   } else {
     statusEl.dataset.kind = "busy";
-    statusEl.textContent = `Build ${job.phase || job.status}…`;
+    const phase = job.phase || job.status;
+    const labels = {
+      queued: "Queued…",
+      cloning: "Downloading repository…",
+      detecting: "Detecting stack…",
+      downloading: "Downloading toolchain image…",
+      building: "Installing deps + building…",
+    };
+    statusEl.textContent = labels[phase] || `Running (${phase})…`;
   }
 
   const logText = job.result?.logTail || job.log || "";
   logEl.textContent = logText || "(no log yet)";
+}
+
+async function pollBuildJob(jobId) {
+  return new Promise((resolve, reject) => {
+    const poll = async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "RG_BUILD_JOB",
+          jobId,
+        });
+        if (!response?.ok || !response.job) {
+          throw new Error(response?.error || "Lost build job");
+        }
+        renderBuildJob(response.job);
+        if (response.job.status === "done" || response.job.status === "error") {
+          stopBuildPoll();
+          resolve(response.job);
+        }
+      } catch (error) {
+        stopBuildPoll();
+        reject(error);
+      }
+    };
+
+    buildPollTimer = setInterval(poll, 2000);
+    poll();
+  });
 }
 
 async function handleBuildCheck() {
@@ -938,24 +1046,33 @@ async function handleBuildCheck() {
   const btn = document.getElementById("buildBtn");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = "Building…";
+    btn.textContent = "Testing…";
   }
 
-  const statusEl = document.getElementById("buildStatus");
   const logEl = document.getElementById("buildLog");
-  if (statusEl) {
-    statusEl.hidden = false;
-    statusEl.dataset.kind = "busy";
-    statusEl.textContent = "Starting build check…";
-  }
   if (logEl) {
     logEl.hidden = false;
     logEl.textContent = "";
   }
-
-  const ref = refFromRepoPathname(currentRepo.pathname) || undefined;
+  setBuildSetup(null);
+  setBuildStatus("Starting production test…", "busy");
 
   try {
+    const ready = await ensureAgentReady();
+    if (!ready) {
+      throw new Error(
+        "Helper did not come online in time. Install Docker Desktop + Node, run the setup command, then click Test production again.",
+      );
+    }
+
+    const health = await chrome.runtime.sendMessage({ type: "RG_AGENT_HEALTH" });
+    if (health?.online && health.docker === false) {
+      throw new Error(
+        "Docker is not running. Open Docker Desktop, wait until it is ready, then click Test production again.",
+      );
+    }
+
+    const ref = refFromRepoPathname(currentRepo.pathname) || undefined;
     const started = await chrome.runtime.sendMessage({
       type: "RG_BUILD_CHECK",
       owner: currentRepo.owner,
@@ -963,42 +1080,13 @@ async function handleBuildCheck() {
       ref,
     });
     if (!started?.ok || !started.job?.id) {
-      throw new Error(started?.error || "Failed to start build job");
+      throw new Error(started?.error || "Failed to start production test");
     }
 
-    const jobId = started.job.id;
     renderBuildJob(started.job);
-
-    await new Promise((resolve, reject) => {
-      const poll = async () => {
-        try {
-          const response = await chrome.runtime.sendMessage({
-            type: "RG_BUILD_JOB",
-            jobId,
-          });
-          if (!response?.ok || !response.job) {
-            throw new Error(response?.error || "Lost build job");
-          }
-          renderBuildJob(response.job);
-          if (response.job.status === "done" || response.job.status === "error") {
-            stopBuildPoll();
-            resolve(response.job);
-          }
-        } catch (error) {
-          stopBuildPoll();
-          reject(error);
-        }
-      };
-
-      buildPollTimer = setInterval(poll, 2000);
-      poll();
-    });
+    await pollBuildJob(started.job.id);
   } catch (error) {
-    if (statusEl) {
-      statusEl.hidden = false;
-      statusEl.dataset.kind = "fail";
-      statusEl.textContent = String(error?.message || error);
-    }
+    setBuildStatus(String(error?.message || error), "fail");
   } finally {
     buildBusy = false;
     stopBuildPoll();
