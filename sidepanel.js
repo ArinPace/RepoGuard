@@ -1642,6 +1642,28 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  document.getElementById("setupHaveDockerBtn").addEventListener("click", () => {
+    saveSetupProgress({ dockerHaveItAt: Date.now() })
+      .then(() => {
+        const note = document.getElementById("setupNote");
+        if (note) {
+          note.textContent =
+            "Marked Docker as installed. Next: mark Node if you have it, then Start helper.";
+        }
+      })
+      .catch(() => {});
+  });
+  document.getElementById("setupHaveNodeBtn").addEventListener("click", () => {
+    saveSetupProgress({ nodeHaveItAt: Date.now() })
+      .then(() => {
+        const note = document.getElementById("setupNote");
+        if (note) {
+          note.textContent =
+            "Marked Node as installed. Click Start helper when ready.";
+        }
+      })
+      .catch(() => {});
+  });
   document.getElementById("setupDockerBtn").addEventListener("click", () => {
     requestSetupDownload("docker").catch(() => {});
   });
